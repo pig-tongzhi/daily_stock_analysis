@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [文档] 修正 `docs/intelligence-sources.md` 中「Agent 分析同样通过 `news_context` 注入本地资讯证据」的错误描述：`_load_persisted_intelligence_context()` 仅在个股分析（`src/core/pipeline.py:683`）与大盘复盘（`:1550`）中调用，`src/agent/` 下没有对 `IntelligenceService` 的调用，问股的 `news_context` 由其自身搜索工具产出。
+
+
 - [新功能] Web 新增「资讯」页面（`/intelligence`），可查看已落库的资讯池条目与情报源状态：支持按市场、作用域（`symbol` / `market`）、时间窗口筛选与关键词搜索，提供「立即拉取」触发已启用情报源抓取；后端复用既有 `api/v1/intelligence/*` 接口，未新增 Python 端点。
 
 - [新功能] 新增 `NEWS_INTEL_ALLOW_PRIVATE_HOSTS`（默认 `false`）显式放行资讯源私网/回环地址，供自托管在本机或内网的 RSSHub / NewsNow 接入使用；默认行为不变，开启后跳过 hostname 黑名单与 DNS 解析结果校验（含二次校验），`http(s)` scheme 校验与凭据校验仍然生效。

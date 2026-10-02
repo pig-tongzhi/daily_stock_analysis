@@ -45,7 +45,7 @@ NEWSNOW_BASE_URL=https://newsnow.busiyi.world
 
 `NEWSNOW_BASE_URL` 用于拼出 `GET {NEWSNOW_BASE_URL}/api/s?id=<source_id>`。
 
-`NEWS_INTEL_AUTO_FETCH_ENABLED` 默认关闭。设为 `true` 后，个股分析、Agent 分析和大盘复盘在读取本地资讯池前会先执行一次 fail-open 自动刷新：缺少内置资讯源时自动创建并启用默认源，已有但禁用的内置默认源会重新启用，然后拉取全部启用源并写入 `intelligence_items`。为避免每只股票重复请求外部站点，运行进程内有 60 分钟冷却；冷却内复用本地库数据。
+`NEWS_INTEL_AUTO_FETCH_ENABLED` 默认关闭。设为 `true` 后，**个股分析与大盘复盘**在读取本地资讯池前会先执行一次 fail-open 自动刷新：缺少内置资讯源时自动创建并启用默认源，已有但禁用的内置默认源会重新启用，然后拉取全部启用源并写入 `intelligence_items`。为避免每只股票重复请求外部站点，运行进程内有 60 分钟冷却；冷却内复用本地库数据。**问股（Agent 对话）不经过该刷新，也不读取本地资讯池**，详见文末「后续接入建议」。
 
 **外部依赖兼容性说明：**
 
@@ -112,9 +112,9 @@ GET {NEWSNOW_BASE_URL}/api/s?id=cls-hot
 首版基线之上，分析链路会 best-effort 读取本地资讯池：
 
 - 个股传统分析会优先读取 `symbol=<股票代码>` 的资讯，并补充同市场 `market` 级资讯；内容追加到既有 `news_context`，随 AnalysisContextPack 摘要和历史 `news_content` 保存。
-- Agent 分析同样通过 `news_context` 注入本地资讯证据，避免 Agent 必须重新搜索才能看到已沉淀新闻。
+- **问股（Agent 对话）不走本地资讯池**：`_load_persisted_intelligence_context()` 仅在个股分析与大盘复盘中调用（`src/core/pipeline.py:683`、`:1550`，另见 `src/market_analyzer.py:2080`），`src/agent/` 下没有对 `IntelligenceService` 的调用；问股的 `news_context` 由其自身工具（`src/agent/tools/search_tools.py`，底层为搜索 provider）产出。因此搜索 provider 未配置时，问股不会因为本地资讯池有数据而获得新闻面证据。
 - 大盘复盘会把同市场 `market` 级资讯合并到市场新闻列表，Prompt、结构化 payload 和报告 news 字段都能看到来源链接。
-- 如果 `NEWS_INTEL_AUTO_FETCH_ENABLED=true`，上述入口会先 fail-open 自动刷新本地资讯池；刷新失败不会阻塞分析。
+- 如果 `NEWS_INTEL_AUTO_FETCH_ENABLED=true`，上述**个股分析与大盘复盘**入口会先 fail-open 自动刷新本地资讯池；刷新失败不会阻塞分析。
 - 本次能力仅新增本地资讯消费路径，不改模型名、provider/base URL、默认模型策略、回退策略、`save_context_snapshot` 前清理逻辑或运行时配置语义；兼容现有部署配置，回滚方式为清退本地资讯接入入口或移除本地资讯源配置/数据。
 
 后续 PR 可以继续完善 NewsNow HTTP provider、报告 evidence 展示和 Web 设置/报告查看入口。
