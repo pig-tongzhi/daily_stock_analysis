@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] 自动拉取启用原本停用的内置资讯源时，改为逐源打印 WARNING（带 `id` 与名称），并说明该源会在被抓取一次后开始尊重关闭操作；新建内置源打 INFO。此前只在汇总行输出 `enabled=N`，排查“某个源为什么自己开了”需要翻时间线。
+
+
 - [改进] 自动拉取冷却改为可配置 `NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS`（默认 `1200` 秒 / 20 分钟，取值 60 ~ 86400），替代原先硬编码的 60 分钟。原 60 分钟会超过最快资讯源（NewsNow 金十数据）约 26 条 × 1 分钟 ≈ 22 分钟的缓存窗口，导致条目滚出源侧缓存后永久丢失；默认值按该窗口推导。只用低频源时可放宽。
 
 

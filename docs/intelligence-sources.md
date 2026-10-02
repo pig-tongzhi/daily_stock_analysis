@@ -56,6 +56,8 @@ NEWSNOW_BASE_URL=https://newsnow.busiyi.world
 
 需要重新启用一个已被抓取过的内置源时，用 `POST /sources/templates/{template_id}` 重建，或直接改库/界面。
 
+**日志**：自动刷新每次创建内置源会打 INFO，每次**启用**一个原本停用的内置源会打 WARNING 并带上 `id` 与名称，例如 `Intelligence auto fetch enabled built-in source id=1 name=SEC Latest Filings (...)`，便于确认某个源的启用状态变化是否来自本机制。
+
 为避免每只股票重复请求外部站点，运行进程内有冷却，冷却内复用本地库数据。
 
 **冷却时长由 `NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS` 控制，默认 `1200`（20 分钟），取值 60 ~ 86400。**

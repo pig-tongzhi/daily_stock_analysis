@@ -226,11 +226,21 @@ class IntelligenceService:
                     if not existing.enabled and existing.last_fetched_at is None:
                         self.repo.update_source_enabled(existing.id, True)
                         enabled_count += 1
+                        # 这是自动拉取主动改动了源的启用状态（不是用户操作），
+                        # 逐源打 WARNING 并带上 id/名称，便于排查"某个源为什么自己开了"。
+                        logger.warning(
+                            "Intelligence auto fetch enabled built-in source id=%s name=%s "
+                            "(never fetched before; it will stay enabled until fetched once, "
+                            "after which disabling it is respected)",
+                            existing.id,
+                            name,
+                        )
                     continue
                 payload = {key: value for key, value in template.items() if key != "template_id"}
                 payload["enabled"] = True
                 self.create_source(payload)
                 created_count += 1
+                logger.info("Intelligence auto fetch created built-in source name=%s", name)
             except Exception as exc:
                 errors.append({"source": name, "error": self._sanitize_error(exc)})
         return {
