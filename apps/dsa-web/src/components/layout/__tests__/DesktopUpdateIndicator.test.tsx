@@ -155,7 +155,10 @@ describe('DesktopUpdateIndicator', () => {
     renderIndicator();
 
     const entry = await screen.findByRole('button', { name: '桌面端更新' });
-    expect(entry).toHaveAttribute('title', expect.stringContaining('42%'));
+    // 状态提示通过 aria-describedby 指向视觉隐藏文本暴露（不再使用原生 title 属性）
+    const describedBy = entry.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy as string)).toHaveTextContent('42%');
     expect(desktopCheckForUpdates).not.toHaveBeenCalled();
   });
 });

@@ -63,12 +63,16 @@ export const DesktopUpdateIndicator: React.FC = () => {
   const tooltip = notice?.message
     || notice?.title
     || t('layout.desktopUpdateIdleHint', { version: currentVersion || t('settings.desktopLatest') });
+  const tooltipId = 'desktop-update-status-hint';
   const canOpenRelease = Boolean(state?.releaseUrl) && (status === 'update-available' || status === 'error');
   const canInstall = status === 'update-downloaded';
   const showRecheck = !busy || status === 'error';
 
   return (
     <div className="relative" ref={containerRef}>
+      <span id={tooltipId} className="sr-only">
+        {tooltip}
+      </span>
       <button
         type="button"
         className={cn(
@@ -76,9 +80,9 @@ export const DesktopUpdateIndicator: React.FC = () => {
           open ? 'border-border text-foreground' : '',
         )}
         aria-label={t('layout.desktopUpdateEntry')}
+        aria-describedby={tooltipId}
         aria-expanded={open}
         aria-haspopup="dialog"
-        title={tooltip}
         onClick={() => setOpen((current) => !current)}
       >
         {busy ? (

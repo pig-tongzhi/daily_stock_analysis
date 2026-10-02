@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] Web 新增「资讯」页面（`/intelligence`），可查看已落库的资讯池条目与情报源状态：支持按市场、作用域（`symbol` / `market`）、时间窗口筛选与关键词搜索，提供「立即拉取」触发已启用情报源抓取；后端复用既有 `api/v1/intelligence/*` 接口，未新增 Python 端点。
+
+- [新功能] 新增 `NEWS_INTEL_ALLOW_PRIVATE_HOSTS`（默认 `false`）显式放行资讯源私网/回环地址，供自托管在本机或内网的 RSSHub / NewsNow 接入使用；默认行为不变，开启后跳过 hostname 黑名单与 DNS 解析结果校验（含二次校验），`http(s)` scheme 校验与凭据校验仍然生效。
+
 - [修复] 个股资金流按沪深北市场请求并取最新有效交易日的主力净流入金额；去掉默认股票和市场排名的错误降级，行业排名仅使用有限金额，行业金额全部缺失或非有限时仍保留有效个股结果。
 
 - [修复] `REPORT_LANGUAGE=en` 时个股决策仪表盘的 system/user prompt 改用完整英文模板（`ko` 复用英文骨架并保留韩文输出指令），不再在中文模板末尾追加英文约束，避免本地小模型（如 `ollama/qwen3:14b`）受主语言影响仍输出中文；JSON 键名、`decision_type`/`action` 枚举与解析契约不变，中文模板保持逐字不变（Fixes #2352）。

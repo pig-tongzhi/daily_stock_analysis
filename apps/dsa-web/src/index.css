@@ -29,7 +29,7 @@
   --card-foreground: 228 35% 12%;
   --popover: 0 0% 100%;
   --popover-foreground: 228 35% 12%;
-  --primary: 193 100% 43%;
+  --primary: 199 72% 42%;
   --primary-foreground: 216 33% 97%;
   --secondary: 214 32% 91%;
   --secondary-foreground: 228 35% 16%;
@@ -41,8 +41,8 @@
   --destructive-foreground: 210 33% 98%;
   --border: 217 28% 84%;
   --input: 217 28% 84%;
-  --ring: 193 100% 43%;
-  --radius: 1rem;
+  --ring: 199 72% 42%;
+  --radius: 0.75rem;
   --elevated: 0 0% 100%;
   --hover: 214 29% 90%;
   --secondary-text: 224 18% 28%;
@@ -76,8 +76,8 @@
   --sentiment-fear: var(--color-danger);
 
   /* Sentiment indicator glow effect - Intensity adjustable via CSS */
-  --glow-spread: 8px;
-  --glow-intensity: 0.18;
+  --glow-spread: 4px;
+  --glow-intensity: 0.05;
   --sentiment-greed-glow: hsl(var(--sentiment-greed) / var(--glow-intensity));
   --sentiment-neutral-glow: hsl(var(--sentiment-neutral) / var(--glow-intensity));
   --sentiment-fear-glow: hsl(var(--sentiment-fear) / var(--glow-intensity));
@@ -119,18 +119,18 @@
   --text-muted-text: hsl(var(--muted-text));
 
   /* Navigation related (using HSL format) */
-  --nav-active-bg: hsl(var(--primary) / 0.09);
+  --nav-active-bg: hsl(var(--primary) / 0.07);
   --nav-active-border: hsl(var(--primary) / 0.24);
   --nav-active-shadow: hsl(var(--primary) / 0.04);
   --nav-hover-bg: hsl(var(--primary) / 0.05);
   --nav-icon-active: hsl(var(--primary));
   --nav-item-height: 2.75rem;
   --nav-item-padding-x: 1rem;
-  --nav-indicator-width: 0.25rem;
+  --nav-indicator-width: 0.125rem;
   --nav-indicator-bg: hsl(var(--primary));
-  --nav-indicator-shadow: hsl(var(--primary) / 0.52);
+  --nav-indicator-shadow: transparent;
   --nav-badge-bg: hsl(var(--primary));
-  --nav-brand-shadow: hsl(var(--primary) / 0.2);
+  --nav-brand-shadow: hsl(var(--primary) / 0.08);
 
   /* Shell Sidebar Custom */
   --shell-sidebar-border: hsl(193 100% 43% / 0.35);
@@ -308,7 +308,7 @@
   --card-foreground: 210 33% 98%;
   --popover: 230 24% 10%;
   --popover-foreground: 210 33% 98%;
-  --primary: 190 100% 50%;
+  --primary: 199 72% 55%;
   --primary-foreground: 228 35% 8%;
   --secondary: 231 19% 15%;
   --secondary-foreground: 210 33% 94%;
@@ -355,8 +355,8 @@
   --sentiment-fear: var(--color-danger);
 
   /* Sentiment indicator glow effect (Dark theme) - Stronger glow */
-  --glow-spread: 12px;
-  --glow-intensity: 0.3;
+  --glow-spread: 6px;
+  --glow-intensity: 0.08;
   --sentiment-greed-glow: hsl(var(--sentiment-greed) / var(--glow-intensity));
   --sentiment-neutral-glow: hsl(var(--sentiment-neutral) / var(--glow-intensity));
   --sentiment-fear-glow: hsl(var(--sentiment-fear) / var(--glow-intensity));
@@ -397,18 +397,18 @@
   --text-muted-text: hsl(var(--muted-text));
 
   /* Navigation related (Dark theme) */
-  --nav-active-bg: hsl(var(--primary) / 0.11);
+  --nav-active-bg: hsl(var(--primary) / 0.09);
   --nav-active-border: hsl(var(--primary) / 0.3);
   --nav-active-shadow: hsl(var(--primary) / 0.05);
   --nav-hover-bg: hsl(var(--primary) / 0.06);
   --nav-icon-active: hsl(var(--primary));
   --nav-item-height: 2.75rem;
   --nav-item-padding-x: 1rem;
-  --nav-indicator-width: 0.25rem;
+  --nav-indicator-width: 0.125rem;
   --nav-indicator-bg: hsl(var(--primary));
   --nav-indicator-shadow: hsl(var(--primary) / 0.8);
   --nav-badge-bg: hsl(var(--primary));
-  --nav-brand-shadow: hsl(var(--primary) / 0.24);
+  --nav-brand-shadow: hsl(var(--primary) / 0.1);
 
   /* Home page related (Dark theme) */
   --home-loading-ring-track: hsl(var(--primary) / 0.2);
