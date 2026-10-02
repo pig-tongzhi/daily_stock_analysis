@@ -35,8 +35,13 @@ NEWS_INTEL_RETENTION_DAYS=30
 NEWS_INTEL_FETCH_TIMEOUT_SEC=8
 NEWS_INTEL_MAX_ITEMS_PER_SOURCE=50
 NEWS_INTEL_AUTO_FETCH_ENABLED=false
+NEWS_INTEL_ALLOW_PRIVATE_HOSTS=false
 NEWSNOW_BASE_URL=https://newsnow.busiyi.world
 ```
+
+`NEWS_INTEL_ALLOW_PRIVATE_HOSTS` 默认 `false`，此时资讯源 URL 必须是公网地址（见「安全边界」）。设为 `true` 后：`_validate_url` 跳过 hostname 黑名单与 DNS 解析结果校验，`_get_with_validated_dns` 跳过 DNS 二次校验，从而允许把资讯源指向本机或内网的自托管实例（例如本机 `http://localhost:5173` 的 NewsNow、`http://127.0.0.1:1200` 的 RSSHub）。
+
+开启后 `http(s)` scheme 校验与凭据校验（禁止 URL 内嵌 username/password）仍然生效，请求仍显式禁用环境代理。**该开关只应在资讯源 URL 完全由自己掌控、且服务不对外暴露写接口的场景下开启**；在任意用户可提交资讯源 URL 的部署里保持默认 `false`，否则等同关闭 SSRF 防护。
 
 `NEWSNOW_BASE_URL` 用于拼出 `GET {NEWSNOW_BASE_URL}/api/s?id=<source_id>`。
 

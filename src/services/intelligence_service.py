@@ -400,6 +400,10 @@ class IntelligenceService:
         hostname = (parsed.hostname or "").strip().lower().rstrip(".")
         if not hostname:
             raise IntelligenceServiceError("source url host is required")
+        # 显式 opt-in：允许私网/回环地址（仅供本机自托管资讯源使用，如本机 RSSHub / NewsNow）。
+        # 开启后跳过 hostname 黑名单与 DNS 解析结果校验；scheme 与凭据校验仍然生效。
+        if getattr(self.config, "news_intel_allow_private_hosts", False):
+            return
         if hostname in _PRIVATE_HOSTNAMES or hostname.endswith(".local"):
             raise IntelligenceServiceError("source url host is not allowed")
         has_public_address = False
@@ -554,6 +558,12 @@ class IntelligenceService:
         return content
 
     def _get_with_validated_dns(self, raw_url: str, **kwargs: Any) -> requests.Response:
+        # 显式 opt-in：允许私网/回环地址时跳过 DNS 二次校验（防 rebinding）。
+        # 仍然显式禁用环境代理，避免本机请求被代理拦截。
+        if getattr(self.config, "news_intel_allow_private_hosts", False):
+            request_kwargs = dict(kwargs)
+            request_kwargs.setdefault("proxies", _DISABLE_REQUEST_PROXIES)
+            return requests.get(raw_url, **request_kwargs)
         parsed = urlparse(raw_url)
         target_hostname = self._normalize_hostname(parsed.hostname)
         original_getaddrinfo = socket.getaddrinfo
