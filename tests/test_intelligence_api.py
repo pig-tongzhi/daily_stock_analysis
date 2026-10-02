@@ -24,6 +24,10 @@ class IntelligenceApiTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_dir = tempfile.TemporaryDirectory()
         os.environ["DATABASE_PATH"] = os.path.join(self._temp_dir.name, "api_intel.db")
+        # 显式固定 SSRF 相关配置，避免用例结果随本机 .env 漂移（本机自托管资讯源时
+        # 常把 NEWS_INTEL_ALLOW_PRIVATE_HOSTS 打开、把 NEWSNOW_BASE_URL 指向 localhost）。
+        os.environ["NEWS_INTEL_ALLOW_PRIVATE_HOSTS"] = "false"
+        os.environ["NEWSNOW_BASE_URL"] = "https://newsnow.example.com"
         Config._instance = None
         DatabaseManager.reset_instance()
         self._dns_patcher = patch(

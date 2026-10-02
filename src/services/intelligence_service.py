@@ -202,7 +202,18 @@ class IntelligenceService:
         return {"items": items, "created_count": created_count, "total": len(items)}
 
     def ensure_default_sources_enabled(self) -> Dict[str, Any]:
-        """Create missing built-in sources and enable existing built-ins for auto mode."""
+        """Create missing built-in sources and enable built-ins the user has not acted on.
+
+        For an existing built-in that is currently disabled, `last_fetched_at`
+        tells the two cases apart:
+
+        * **never fetched** — an untouched default; enable it, so "auto mode"
+          keeps meaning "use the built-in set" (a fresh install still works).
+        * **already fetched at least once** — it ran and was then switched off on
+          purpose (too noisy, wrong market, broken upstream, ...); leave it
+          disabled. Otherwise auto mode would resurrect it on every run and keep
+          paying its fetch cost, and the user could never switch it off.
+        """
         created_count = 0
         enabled_count = 0
         errors = []
@@ -212,7 +223,7 @@ class IntelligenceService:
             try:
                 existing = self.repo.get_source_by_name(name)
                 if existing is not None:
-                    if not existing.enabled:
+                    if not existing.enabled and existing.last_fetched_at is None:
                         self.repo.update_source_enabled(existing.id, True)
                         enabled_count += 1
                     continue

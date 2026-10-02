@@ -55,6 +55,12 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         os.environ["NEWS_INTEL_RETENTION_DAYS"] = "30"
         os.environ["NEWS_INTEL_MAX_ITEMS_PER_SOURCE"] = "50"
         os.environ["NEWS_INTEL_FETCH_TIMEOUT_SEC"] = "3"
+        # SSRF 校验默认关闭私网放行；显式固定，避免用例结果随本机 .env 漂移。
+        # 需要放行的用例自行覆盖该配置。
+        os.environ["NEWS_INTEL_ALLOW_PRIVATE_HOSTS"] = "false"
+        # 内置 NewsNow 模板的 URL 由 NEWSNOW_BASE_URL 拼出。固定为公网域名，
+        # 否则本机把该值指向 localhost 时，模板会因私网校验被拒而干扰用例。
+        os.environ["NEWSNOW_BASE_URL"] = "https://newsnow.example.com"
         Config._instance = None
         DatabaseManager.reset_instance()
         IntelligenceService.reset_auto_fetch_state()
@@ -223,6 +229,14 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertNotIn(secret_url, message)
         self.assertNotIn("token=", message)
         self.assertNotIn("super-secret", message)
+
+    def test_private_network_url_is_allowed_when_explicitly_opted_in(self) -> None:
+        """开启 NEWS_INTEL_ALLOW_PRIVATE_HOSTS 后应放行私网/回环地址。"""
+        self.service.config.news_intel_allow_private_hosts = True
+        created = self.service.create_source(
+            {"name": "local-feed", "url": "http://127.0.0.1:1200/cls/depth", "scope_type": "market"}
+        )
+        self.assertEqual(created["url"], "http://127.0.0.1:1200/cls/depth")
 
     def test_private_network_url_is_rejected(self) -> None:
         with self.assertRaises(IntelligenceServiceError):
@@ -426,6 +440,34 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertEqual(result["bootstrap"]["created_count"], 0)
         self.assertEqual(result["bootstrap"]["enabled_count"], created["total"])
         self.assertEqual(self.service.list_sources(enabled=True)["total"], created["total"])
+
+    def test_refresh_auto_sources_keeps_deliberately_disabled_default_source_off(self) -> None:
+        """已被抓取过、随后被关掉的内置源，不应在自动拉取时被重新启用。"""
+        self.service.config.news_intel_auto_fetch_enabled = True
+        created = self.service.create_default_sources()
+
+        def fake_get(url, **_kwargs):
+            if "newsnow" in url:
+                return self._mock_json_response(source_url=url)
+            return self._mock_response(source_url=url)
+
+        # 第一轮：内置源首次被抓取，last_fetched_at 被写上
+        with patch("src.services.intelligence_service.requests.get", side_effect=fake_get):
+            self.service.refresh_auto_sources(force=True)
+
+        target = self.service.repo.get_source_by_name("SEC Latest Filings")
+        self.assertIsNotNone(target)
+        self.assertIsNotNone(target.last_fetched_at)
+        self.service.repo.update_source_enabled(target.id, False)
+
+        # 第二轮：该源已被抓取过且被关闭，自动刷新必须保持关闭
+        IntelligenceService.reset_auto_fetch_state()
+        with patch("src.services.intelligence_service.requests.get", side_effect=fake_get):
+            result = self.service.refresh_auto_sources(force=True)
+
+        self.assertEqual(result["bootstrap"]["enabled_count"], 0)
+        self.assertFalse(self.service.repo.get_source_by_name("SEC Latest Filings").enabled)
+        self.assertEqual(created["created_count"], created["total"])
 
     def test_refresh_auto_sources_uses_cooldown_after_success(self) -> None:
         self.service.config.news_intel_auto_fetch_enabled = True
