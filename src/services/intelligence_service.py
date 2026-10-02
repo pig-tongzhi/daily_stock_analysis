@@ -36,7 +36,7 @@ _UPSTREAM_FETCH_FAILURE_MESSAGE = "fetch failed: upstream request failed"
 _REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
 _DISABLE_REQUEST_PROXIES = {"http": None, "https": None}
 _DNS_GUARD_LOCK = threading.Lock()
-_AUTO_FETCH_MIN_INTERVAL_SECONDS = 60 * 60
+_AUTO_FETCH_MIN_INTERVAL_SECONDS = 20 * 60  # 自动拉取冷却默认值（秒），可被 NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS 覆盖
 _BUILTIN_SOURCE_TEMPLATES = [
     {
         "template_id": "sec-company-news",
@@ -329,10 +329,14 @@ class IntelligenceService:
                 cls._auto_fetch_condition.wait()
             if waited_for_in_progress and cls._auto_fetch_last_result is not None:
                 return dict(cls._auto_fetch_last_result)
+            cooldown_seconds = int(
+                getattr(self.config, "news_intel_auto_fetch_min_interval_seconds", 0)
+                or _AUTO_FETCH_MIN_INTERVAL_SECONDS
+            )
             if (
                 not force
                 and cls._auto_fetch_last_run_at is not None
-                and (now - cls._auto_fetch_last_run_at).total_seconds() < _AUTO_FETCH_MIN_INTERVAL_SECONDS
+                and (now - cls._auto_fetch_last_run_at).total_seconds() < cooldown_seconds
             ):
                 return {"ok": True, "skipped": True, "reason": "cooldown"}
             cls._auto_fetch_in_progress = True

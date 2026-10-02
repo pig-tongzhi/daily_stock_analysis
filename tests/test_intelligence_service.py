@@ -487,6 +487,30 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertEqual(second["reason"], "cooldown")
         mock_get.assert_not_called()
 
+    def test_refresh_auto_sources_cooldown_honours_configured_interval(self) -> None:
+        """冷却时长应取 NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS，而不是固定 60 分钟。"""
+        self.service.config.news_intel_auto_fetch_enabled = True
+        self.service.config.news_intel_auto_fetch_min_interval_seconds = 1
+
+        def fake_get(url, **_kwargs):
+            if "newsnow" in url:
+                return self._mock_json_response(source_url=url)
+            return self._mock_response(source_url=url)
+
+        with patch("src.services.intelligence_service.requests.get", side_effect=fake_get):
+            first = self.service.refresh_auto_sources(force=True)
+        self.assertTrue(first["ok"])
+        self.assertFalse(first.get("skipped"))
+
+        # 冷却只有 1 秒，稍等后应再次真正抓取，而不是返回 cooldown 跳过
+        time.sleep(1.1)
+        with patch("src.services.intelligence_service.requests.get", side_effect=fake_get) as mock_get:
+            second = self.service.refresh_auto_sources()
+
+        self.assertFalse(second.get("skipped"))
+        self.assertNotEqual(second.get("reason"), "cooldown")
+        self.assertTrue(mock_get.called)
+
     def test_refresh_auto_sources_waits_for_in_flight_fetch_before_reading_items(self) -> None:
         self.service.config.news_intel_auto_fetch_enabled = True
         fetch_started = threading.Event()

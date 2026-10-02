@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] 自动拉取冷却改为可配置 `NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS`（默认 `1200` 秒 / 20 分钟，取值 60 ~ 86400），替代原先硬编码的 60 分钟。原 60 分钟会超过最快资讯源（NewsNow 金十数据）约 26 条 × 1 分钟 ≈ 22 分钟的缓存窗口，导致条目滚出源侧缓存后永久丢失；默认值按该窗口推导。只用低频源时可放宽。
+
+
 - [修复] 自动拉取不再复活被有意关闭的内置资讯源：`ensure_default_sources_enabled()` 现按 `last_fetched_at` 区分——从未被抓取过的停用内置源会被启用（保持“自动模式 = 使用内置源集”的语义，全新安装不受影响）；**已被抓取过**随后被关闭的内置源则保持停用。此前每次自动拉取都会把它改回启用，用户无法真正关闭某个内置源，还会持续支付其抓取成本（如面向美股/港股的 SEC、HKEX、MarketWatch）。
 
 - [测试] 资讯相关用例显式固定 `NEWS_INTEL_ALLOW_PRIVATE_HOSTS` 与 `NEWSNOW_BASE_URL`，不再随本机 `.env`（自托管场景下常开启私网放行、把 NewsNow 指向 localhost）漂移；并补充“私网放行开关生效”与“被有意关闭的内置源不被复活”两条用例。
