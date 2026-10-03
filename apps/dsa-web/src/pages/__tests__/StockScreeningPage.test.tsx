@@ -1055,7 +1055,7 @@ describe('StockScreeningPage', () => {
     expect(screen.getByLabelText('策略')).toHaveValue('capital_heat');
   });
 
-  it('hands a screening candidate to DSA analysis with mapped skills', async () => {
+  it('hands a screening candidate to rjharness analysis with mapped skills', async () => {
     getStrategies.mockResolvedValueOnce({
       enabled: true,
       strategies: [
@@ -1777,7 +1777,7 @@ describe('StockScreeningPage', () => {
     expect(screen.queryByText(/RemoteDisconnected/)).not.toBeInTheDocument();
   });
 
-  it('shows DSA enrichment summary, news, and enrichment metadata', async () => {
+  it('shows rjharness enrichment summary, news, and enrichment metadata', async () => {
     getScreeningStatus.mockResolvedValueOnce({
       enabled: true,
       available: true,
@@ -1791,7 +1791,7 @@ describe('StockScreeningPage', () => {
           name: '贵州茅台',
           score: 91.2,
           reason: 'Screening pick',
-          dsaAnalysisSummary: 'DSA行情：现价 1688，涨跌幅 1.2%；DSA新闻：贵州茅台最新公告',
+          dsaAnalysisSummary: 'rjharness行情：现价 1688，涨跌幅 1.2%；rjharness新闻：贵州茅台最新公告',
           dsaNews: [{ title: '贵州茅台最新公告', source: '测试源' }],
           dsaContext: {
             enriched: true,

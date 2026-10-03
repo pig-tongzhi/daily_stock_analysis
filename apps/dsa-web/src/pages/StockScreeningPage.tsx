@@ -377,12 +377,12 @@ const normalizeScreenMessageKey = (value: string) => {
 
 const formatEnrichmentSummary = (value: string) =>
   value
-    .replace(/DSA行情\s*[:：]\s*/gi, '行情：')
-    .replace(/DSA新闻\s*[:：]\s*/gi, '新闻：')
-    .replace(/DSA事件\s*[:：]\s*/gi, '事件：');
+    .replace(/(?:rjharness|rjharness)行情\s*[:：]\s*/gi, '行情：')
+    .replace(/(?:rjharness|rjharness)新闻\s*[:：]\s*/gi, '新闻：')
+    .replace(/(?:rjharness|rjharness)事件\s*[:：]\s*/gi, '事件：');
 
 const formatScreenMessage = (value: string) => {
-  if (/^DSA provider context applied \d+ of \d+ candidates/i.test(value)) {
+  if (/^rjharness provider context applied \d+ of \d+ candidates/i.test(value)) {
     return '';
   }
   if (/^LLM ranking skipped:\s*no LLM config/i.test(value)) {
@@ -415,7 +415,7 @@ const formatScreenMessage = (value: string) => {
   if (/^Industry\/concepts enrichment:/i.test(value)) {
     return '部分行业或题材信息未能补齐。';
   }
-  if (/^DSA deep analysis failed for /i.test(value)) {
+  if (/^rjharness deep analysis failed for /i.test(value)) {
     return '部分候选的深度分析未完成。';
   }
 
