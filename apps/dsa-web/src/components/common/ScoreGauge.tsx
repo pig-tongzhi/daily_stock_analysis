@@ -95,27 +95,18 @@ export const ScoreGauge: React.FC<ScoreGaugeProps> = ({
   const arcLength = circumference * 0.75;
   const progress = (animatedScore / 100) * arcLength;
 
-  // Sentiment colors - dynamically computed based on score thresholds.
-  // Light theme uses a restrained glow; dark theme keeps the stronger terminal-style glow.
+  // Sentiment colors - monochrome lightness tiers, driven by --gauge-* tokens.
+  // Glow is disabled in the monochrome theme.
   const sentimentConfig = {
     greed: {
-      color: '#00d4ff',       // Cyan
-      glowFilter: 'rgba(0, 212, 255, 0.66)',
-      lightColor: '#22d3ee',  // Lighter cyan
-      lightEndColor: '#0891b2', // Darker cyan
-    },
+      color: 'var(--gauge-greed)',             glowFilter: 'transparent',
+      lightColor: 'var(--gauge-greed)',        lightEndColor: 'var(--gauge-greed-end)',     },
     neutral: {
-      color: '#a855f7',       // Purple
-      glowFilter: 'rgba(168, 85, 247, 0.66)',
-      lightColor: '#c084fc',  // Lighter purple
-      lightEndColor: '#9333ea', // Darker purple
-    },
+      color: 'var(--gauge-neutral)',             glowFilter: 'transparent',
+      lightColor: 'var(--gauge-neutral)',        lightEndColor: 'var(--gauge-neutral-end)',     },
     fear: {
-      color: '#ff4466',       // Red
-      glowFilter: 'rgba(255, 68, 102, 0.66)',
-      lightColor: '#fb7185',  // Lighter rose
-      lightEndColor: '#e11d48', // Darker rose
-    },
+      color: 'var(--gauge-fear)',             glowFilter: 'transparent',
+      lightColor: 'var(--gauge-fear)',        lightEndColor: 'var(--gauge-fear-end)',     },
   };
 
   // Map score to sentiment key

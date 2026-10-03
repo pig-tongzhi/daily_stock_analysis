@@ -53,7 +53,8 @@ import { areStockCodesEquivalent, normalizeStockCode } from '../utils/stockCode'
 import { parseDecisionSignalDate } from '../utils/decisionSignalTime';
 import { buildDecisionActionLabelMap, getDecisionActionLabel } from '../utils/decisionAction';
 
-const PIE_COLORS = ['#00d4ff', '#00ff88', '#ffaa00', '#ff7a45', '#7f8cff', '#ff4466'];
+// 单色主题：用灰阶替代彩色分类调色板，靠明度区分扇区
+const PIE_COLORS = ['#e5e5e5', '#a3a3a3', '#737373', '#525252', '#8a8a8a', '#c4c4c4'];
 const DEFAULT_PAGE_SIZE = 20;
 const PORTFOLIO_SIGNAL_LOOKUP_CONCURRENCY = 6;
 const FALLBACK_BROKERS: PortfolioImportBrokerItem[] = [
