@@ -414,3 +414,49 @@ def test_rank_candidates_with_metadata_reports_all_invalid_models() -> None:
     assert result.failure_reason == "invalid_response"
     assert result.attempted_models == ["deepseek/deepseek-chat", "openai/gpt-4o"]
     assert len(result.errors) == 2
+
+
+def test_rank_candidates_with_metadata_labels_truncated_json_distinctly() -> None:
+    """A response cut off by max_tokens is valid JSON with the tail missing.
+
+    Reporting it as "no_json_found" hides the real remedy (a larger
+    LLM_MAX_TOKENS) behind a prompt-shaped explanation, so keep the two apart.
+    """
+    candidates = [Pick(rank=1, code="601166", name="兴业银行", final_score=90.0, screen_score=90.0)]
+    truncated = '{"ranked":[{"code":"601166","llm_score":82,"thesis":"低估值修复'
+
+    with patch("src.services.screening.ranker._call_llm", return_value=truncated):
+        result = rank_candidates_with_metadata(
+            candidates,
+            "test hints",
+            "test-key",
+            "deepseek/deepseek-chat",
+            fallback_models=[],
+            max_retries=0,
+        )
+
+    assert result.ranked is False
+    assert any("truncated_json" in error for error in result.errors)
+    assert not any("no_json_found" in error for error in result.errors)
+
+
+def test_rank_candidates_with_metadata_keeps_no_json_found_for_prose() -> None:
+    """Plain prose is not truncation: it must stay on the original error code."""
+    candidates = [Pick(rank=1, code="601166", name="兴业银行", final_score=90.0, screen_score=90.0)]
+
+    with patch(
+        "src.services.screening.ranker._call_llm",
+        return_value="抱歉，我无法按要求输出 JSON。",
+    ):
+        result = rank_candidates_with_metadata(
+            candidates,
+            "test hints",
+            "test-key",
+            "deepseek/deepseek-chat",
+            fallback_models=[],
+            max_retries=0,
+        )
+
+    assert result.ranked is False
+    assert any("no_json_found" in error for error in result.errors)
+    assert not any("truncated_json" in error for error in result.errors)

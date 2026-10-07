@@ -703,8 +703,17 @@ def _parse_ranking_response_detail(response: str, candidates: list[Pick]) -> Ran
 
     parsed = _extract_ranking_json(response, errors)
     if parsed is None:
-        errors.append("no_json_found")
-        logger.warning("No JSON object or array found in LLM response")
+        if _looks_like_truncated_json(response):
+            errors.append("truncated_json")
+            logger.warning(
+                "LLM response is truncated JSON (unbalanced brackets, %s chars); "
+                "raise LLM_MAX_TOKENS — the ranking schema needs room for every "
+                "candidate field",
+                len(response or ""),
+            )
+        else:
+            errors.append("no_json_found")
+            logger.warning("No JSON object or array found in LLM response")
         return RankingParseResult(candidates, 0.0, errors)
     if isinstance(parsed, dict):
         items = parsed.get("ranked", [])
@@ -825,6 +834,42 @@ def _try_parse_json_lenient(raw: str, errors: list[str]):
     errors.append(f"json_decode_error:{first_error}")
     logger.warning("Failed to parse LLM ranking JSON: %s", first_error)
     return None
+
+
+def _looks_like_truncated_json(response: str) -> bool:
+    """True when the text starts as JSON but ends mid-structure.
+
+    A response cut off by ``max_tokens`` is not "no JSON": it is well-formed
+    JSON with the tail missing, and the remedy is a larger output budget rather
+    than a prompt change. Counting brackets outside string literals tells the
+    two apart, so the log says which one happened.
+    """
+    text = (response or "").strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].strip() if "\n" in text else ""
+    if not text or text[0] not in "{[":
+        return False
+    depth = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth > 0 or in_string
 
 
 def _extract_ranking_json(response: str, errors: list[str]):

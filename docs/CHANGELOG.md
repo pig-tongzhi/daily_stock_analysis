@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 选股 LLM 重排不再因响应被截断而静默降级。默认 `LLM_MAX_TOKENS=2048` 放不下排序 schema（每个候选 14 个字段、多为长中文说明），实测 5 个候选的响应在 4200+ 字符处被截断，JSON 尾部缺失后 `_extract_ranking_json` 解析失败，被记为 `no_json_found`，选股于是退回纯因子排序（`llm_ranked=false`）且只在日志留一行 WARNING。
+- [修复] 区分“响应被截断”与“确实没有 JSON”：新增 `_looks_like_truncated_json`（在字符串字面量之外统计括号配平），截断时报 `truncated_json` 并提示上调 `LLM_MAX_TOKENS`，不再误导为提示词问题。
+- [文档] 本地 `.env` 的 `LLM_MAX_TOKENS` 由注释默认值改为显式 `8192`（实测该值下 `llm_ranked=true`，每个候选都产出 `llm_score`/`llm_confidence`/`llm_thesis`）。
+
+
 - [修复] 问股（Agent 对话）的标的锁定不再忽略中文股票名。此前 `extract_stock_codes` 只按代码格式匹配，“看看宁德时代”这类只写名称的消息提取不到任何候选，于是 `resolve_stock_scope` 无法区分“想换一只股票”和“继续聊当前股票”，把作用域锁死在会话里已有的标的上；随后针对新标的的工具调用一律返回 `stock_scope_violation`（`retriable=False`），看起来像被环境拦住。现在新增 `extract_stock_mentions`，在代码匹配之外用本地名称表（内置表 + 磁盘缓存的 AkShare 名称映射，离线可用、不阻塞）解析中文名，`resolve_stock_scope` 改用它。
 - [修复] 名称匹配附带两处防误判：① 匹配窗口包含名称末尾的 ASCII 字母，避免 `京东方A` 被从字母处切断后仅剩 `京东` 而命中无关的美股代码；② 拒绝紧跟在程度副词（更/最/很/挺/太/超/蛮/颇/极）之后的匹配，避免“哪个更值得买”把口语短语识别成上市公司「值得买」(300785)。`extract_stock_codes` 保持纯代码格式校验不变，`web_intent_tokenizer` 的“不查库”契约不受影响。
 
