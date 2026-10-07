@@ -3,9 +3,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 SWITCH_CLEANUP_KEYS = {
@@ -211,6 +216,109 @@ def extract_stock_codes(text: str, registry: Optional[Any] = None) -> List[str]:
     return candidates
 
 
+# --- Chinese stock names in free text -------------------------------------
+# extract_stock_codes() only matches code-shaped tokens, so a message that
+# names a company instead of quoting its code ("看看宁德时代") yields no
+# candidates. Scope resolution then cannot tell an explicit request for another
+# stock from a continuation of the current one, and pins the session to the
+# stock already in context: every tool call for the new stock comes back as
+# stock_scope_violation with retriable=False. Names are the common spelling in
+# Chinese chat, so match them too.
+
+_CJK_RUN_PATTERN = re.compile(r"[A-Za-z]{0,3}[\u4e00-\u9fff]+[A-Za-z0-9]{0,3}")
+_NAME_MIN_LEN = 2
+_NAME_MAX_LEN = 6  # longest A-share short name in practice; caps window cost
+_NAME_INDEX_TTL_SECONDS = 300
+
+# A few listed companies are named after ordinary Chinese phrases, so plain
+# substring matching invents a stock: "哪个更值得买" contains 值得买 (300785).
+# In that position the phrase follows a degree adverb, which never precedes a
+# company name in a request ("更宁德时代" is not something anyone types), so a
+# degree adverb immediately before a match means it is prose. 比 is deliberately
+# absent: "比茅台好" genuinely refers to 茅台.
+_NAME_DEGREE_PREFIXES = frozenset("更最很挺太超蛮颇极")
+
+_name_index_lock = threading.Lock()
+_name_index_cache: Optional[Tuple[float, Dict[str, str]]] = None
+
+
+def _stock_name_index() -> Dict[str, str]:
+    """Cached name->code index; empty when the resolver is unavailable."""
+    global _name_index_cache
+    now = time.time()
+    with _name_index_lock:
+        cached = _name_index_cache
+        if cached is not None and (now - cached[0]) < _NAME_INDEX_TTL_SECONDS:
+            return cached[1]
+    index: Dict[str, str] = {}
+    try:
+        from src.services.name_to_code_resolver import local_name_to_code_map
+
+        index = local_name_to_code_map() or {}
+    except Exception as exc:  # fail open: code matching keeps working
+        index = {}
+        logger.debug("Stock name index unavailable; name matching disabled: %s", exc)
+    with _name_index_lock:
+        _name_index_cache = (now, index)
+    return index
+
+
+def _names_in_run(run: str, index: Dict[str, str], normalize) -> List[str]:
+    """Longest-match, non-overlapping name lookup inside one CJK run.
+
+    Longest first plus overlap suppression is what keeps short fragments from
+    inventing entities: a 2-character window inside a longer name would
+    otherwise produce a wrong code whenever that fragment happens to be a real
+    (different) stock name.
+    """
+    length = len(run)
+    taken = [False] * length
+    found: List[str] = []
+    for size in range(min(_NAME_MAX_LEN, length), _NAME_MIN_LEN - 1, -1):
+        for start in range(0, length - size + 1):
+            if any(taken[start:start + size]):
+                continue
+            if start > 0 and run[start - 1] in _NAME_DEGREE_PREFIXES:
+                continue
+            code = index.get(normalize(run[start:start + size]))
+            if not code:
+                continue
+            found.append(code)
+            for position in range(start, start + size):
+                taken[position] = True
+    return found
+
+
+def extract_stock_mentions(text: str, registry: Optional[Any] = None) -> List[str]:
+    """Stock codes mentioned in *text*, by code or by Chinese name.
+
+    Wraps :func:`extract_stock_codes` (unchanged, still a pure format check for
+    ``web_intent_tokenizer``) with a local name lookup. Purely local: the index
+    is a dict built from cached tables, so this stays off the network and cheap
+    enough to run on every chat turn.
+    """
+    candidates = list(extract_stock_codes(text, registry))
+    if not text:
+        return candidates
+    runs = _CJK_RUN_PATTERN.findall(text)
+    if not runs:
+        # Pure code / Latin input: skip the resolver import entirely, it is the
+        # expensive part of this path and cannot help without a Chinese name.
+        return candidates
+    index = _stock_name_index()
+    if not index:
+        return candidates
+    try:
+        from src.services.name_to_code_resolver import normalize_stock_name
+    except Exception:
+        return candidates
+    for run in runs:
+        for code in _names_in_run(run, index, normalize_stock_name):
+            if code not in candidates:
+                candidates.append(code)
+    return candidates
+
+
 def _is_compare_message(
     message: str,
     candidates: List[str],
@@ -233,7 +341,7 @@ def _is_compare_message(
         return False
 
     for match in _LINKED_COMPARE_PATTERN.finditer(message):
-        body_candidates = set(extract_stock_codes(f"比较 {match.group('body')}", registry))
+        body_candidates = set(extract_stock_mentions(f"比较 {match.group('body')}", registry))
         if body_candidates & new_candidates:
             return True
     return False
@@ -289,7 +397,7 @@ def resolve_stock_scope(
 
     if not current_code:
         if invalid_context_code or strict_initial_scope:
-            candidates = extract_stock_codes(message_text, registry)
+            candidates = extract_stock_mentions(message_text, registry)
             if strict_initial_scope and not invalid_context_code and not candidates:
                 return StockScopeResolution(
                     effective_context=_with_skills(original_context, skills),
@@ -315,7 +423,7 @@ def resolve_stock_scope(
             stock_scope=None,
         )
 
-    candidates = extract_stock_codes(message_text, registry)
+    candidates = extract_stock_mentions(message_text, registry)
     new_candidates = [code for code in candidates if code != current_code]
     mode = "maintain"
     effective_context = dict(original_context)

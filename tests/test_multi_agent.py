@@ -44,7 +44,7 @@ from src.agent.skills.synthesis import (
 )
 from src.agent.skills.scheduler import SkillBatchResult
 from src.agent.skills.aggregator import SkillAggregator
-from src.agent.stock_scope import StockScope, resolve_stock_scope
+from src.agent.stock_scope import StockScope, extract_stock_mentions, resolve_stock_scope
 from src.config import AGENT_MAX_STEPS_DEFAULT, Config
 from src.storage import DatabaseManager
 
@@ -227,6 +227,73 @@ class TestExtractStockCode(unittest.TestCase):
 
 class TestStockScopeResolution(unittest.TestCase):
     """Validate chat stock-scope state transitions."""
+
+    # Chinese users normally type the company name rather than the code. Before
+    # names were matched, those turns produced no candidates at all, so the
+    # session stayed pinned to the stock already in context and every tool call
+    # for the requested stock came back as stock_scope_violation
+    # (retriable=False) — the request looked blocked rather than misrouted.
+
+    def test_chinese_stock_name_switches_scope(self):
+        result = resolve_stock_scope(
+            "看看宁德时代",
+            {"stock_code": "000063", "stock_name": "中兴通讯"},
+        )
+
+        self.assertEqual(result.stock_scope.mode, "switch")
+        self.assertEqual(result.stock_scope.allowed_stock_codes, {"300750"})
+        self.assertEqual(result.effective_context["stock_code"], "300750")
+
+    def test_switch_keyword_with_chinese_name_switches_scope(self):
+        result = resolve_stock_scope(
+            "换成宁德时代",
+            {"stock_code": "000063", "stock_name": "中兴通讯"},
+        )
+
+        self.assertEqual(result.stock_scope.mode, "switch")
+        self.assertEqual(result.stock_scope.allowed_stock_codes, {"300750"})
+
+    def test_two_chinese_names_are_compare_scope(self):
+        result = resolve_stock_scope(
+            "宁德时代和比亚迪哪个好",
+            {"stock_code": "000063", "stock_name": "中兴通讯"},
+        )
+
+        self.assertEqual(result.stock_scope.mode, "compare")
+        self.assertEqual(
+            result.stock_scope.allowed_stock_codes,
+            {"000063", "300750", "002594"},
+        )
+
+    def test_share_class_suffix_stays_attached_to_the_name(self):
+        """京东方A / 万科A end in an ASCII letter. Splitting the CJK run there
+        left only 京东, which resolved to the unrelated US ticker JD."""
+        self.assertEqual(extract_stock_mentions("看看京东方A"), ["000725"])
+        self.assertEqual(extract_stock_mentions("分析万科A"), ["000002"])
+
+    def test_ordinary_phrase_after_degree_adverb_is_not_a_stock(self):
+        """值得买 is both a listed company (300785) and the everyday phrase
+        "worth buying"; only the former should resolve."""
+        self.assertNotIn("300785", extract_stock_mentions("AAPL 和 TSLA 哪个更值得买"))
+        self.assertIn("300785", extract_stock_mentions("看看值得买"))
+
+    def test_sector_only_message_keeps_current_stock(self):
+        """Naming a sector is not naming a stock, so the scope is unchanged —
+        this is the turn the user reported as being blocked."""
+        result = resolve_stock_scope(
+            "帮我筛选一批医药股",
+            {"stock_code": "000063", "stock_name": "中兴通讯"},
+        )
+
+        self.assertEqual(result.stock_scope.mode, "maintain")
+        self.assertEqual(result.stock_scope.allowed_stock_codes, {"000063"})
+
+    def test_name_matching_degrades_to_codes_when_index_is_unavailable(self):
+        """The name index is a local convenience; losing it must not break the
+        code path that web_intent_tokenizer depends on."""
+        with patch("src.agent.stock_scope._stock_name_index", return_value={}):
+            self.assertEqual(extract_stock_mentions("看看宁德时代"), [])
+            self.assertEqual(extract_stock_mentions("看看 300750"), ["300750"])
 
     def test_maintain_keeps_current_stock_for_finance_abbrev_followup(self):
         result = resolve_stock_scope(

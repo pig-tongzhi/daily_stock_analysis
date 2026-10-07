@@ -357,6 +357,37 @@ def _get_akshare_name_to_code() -> Optional[Dict[str, str]]:
     return result
 
 
+def local_name_to_code_map() -> Dict[str, str]:
+    """Return a name->code map built only from locally available data.
+
+    Combines the small built-in reverse table with the disk-cached online map.
+    The online map is served stale-while-revalidate (see
+    ``_get_akshare_name_to_code``), so this never waits on a fetch: with a warm
+    cache it is a dict merge, and with a cold cache it returns just the built-in
+    table rather than blocking. Callers that match names inside free text use
+    this instead of ``resolve_name_to_code`` per candidate, because the latter
+    falls through to difflib fuzzy matching, which is far too slow to run over
+    every substring of a message.
+
+    Keys are normalized via ``_normalize_stock_name``; normalize lookups the
+    same way.
+    """
+    merged: Dict[str, str] = dict(_LOCAL_REVERSE_MAP)
+    try:
+        online = _get_akshare_name_to_code()
+    except Exception as exc:  # never fatal: the built-in table still serves
+        logger.debug(f"[NameResolver] 本地索引跳过 AkShare 缓存: {exc}")
+        online = None
+    if online:
+        merged.update(online)
+    return merged
+
+
+def normalize_stock_name(name: str) -> str:
+    """Public wrapper over ``_normalize_stock_name`` for index lookups."""
+    return _normalize_stock_name(name)
+
+
 def warmup_akshare_cache() -> None:
     """进程启动预热：后台线程触发一次解析链填充（幂等、非阻塞）。
 

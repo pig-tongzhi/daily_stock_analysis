@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [修复] 问股（Agent 对话）的标的锁定不再忽略中文股票名。此前 `extract_stock_codes` 只按代码格式匹配，“看看宁德时代”这类只写名称的消息提取不到任何候选，于是 `resolve_stock_scope` 无法区分“想换一只股票”和“继续聊当前股票”，把作用域锁死在会话里已有的标的上；随后针对新标的的工具调用一律返回 `stock_scope_violation`（`retriable=False`），看起来像被环境拦住。现在新增 `extract_stock_mentions`，在代码匹配之外用本地名称表（内置表 + 磁盘缓存的 AkShare 名称映射，离线可用、不阻塞）解析中文名，`resolve_stock_scope` 改用它。
+- [修复] 名称匹配附带两处防误判：① 匹配窗口包含名称末尾的 ASCII 字母，避免 `京东方A` 被从字母处切断后仅剩 `京东` 而命中无关的美股代码；② 拒绝紧跟在程度副词（更/最/很/挺/太/超/蛮/颇/极）之后的匹配，避免“哪个更值得买”把口语短语识别成上市公司「值得买」(300785)。`extract_stock_codes` 保持纯代码格式校验不变，`web_intent_tokenizer` 的“不查库”契约不受影响。
+
+
 - [改进] 自动拉取启用原本停用的内置资讯源时，改为逐源打印 WARNING（带 `id` 与名称），并说明该源会在被抓取一次后开始尊重关闭操作；新建内置源打 INFO。此前只在汇总行输出 `enabled=N`，排查“某个源为什么自己开了”需要翻时间线。
 - [文档] 本地目录重组后同步 `docs/DSA-资讯系统/` 两份技术文档中的路径：三个服务统一收进 `~/renjiebank/renjie问股/`，启动脚本、日志与 pid 随之下沉；同时把 `.venv/bin` shebang（47 个文件）与两个 verify 的 `node_modules/.bin`（rsshub 198 处 / newsnow 120 处）断链数量的实测结果补进迁移记录。
 
