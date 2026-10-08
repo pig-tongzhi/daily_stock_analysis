@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -10,6 +11,16 @@ from sqlalchemy import and_, delete, desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from src.storage import DatabaseManager, IntelligenceItem, IntelligenceSource, INTELLIGENCE_ITEM_NULL_SCOPE_VALUE
+
+# ``published_at`` is effectively TEXT in the live pool. GLOB (not LIKE) is the
+# right shape check for an ISO timestamp: GLOB's single-character wildcard is
+# ``?``; ``_`` is a literal underscore, so a LIKE-style ``____-__-__*`` pattern
+# would match nothing at all.
+_ISO_TIMESTAMP_GLOB = "????-??-??*"
+# A 1-2 character stock name is too short to defend against substring
+# false positives (e.g. ``中国建筑`` inside ``中国建筑行业``).
+_MIN_NAME_MATCH_CHARS = 3
+_LIKE_ESCAPE_CHAR = "\\"
 
 
 class IntelligenceRepository:
@@ -196,6 +207,149 @@ class IntelligenceRepository:
             ).scalars().all()
             return list(rows), int(total)
 
+    def list_recent_market_items(
+        self,
+        *,
+        days: Optional[int] = None,
+        limit: int = 20,
+        market: Optional[str] = None,
+    ) -> List[IntelligenceItem]:
+        """Read-only: newest market-scope items, for shared LLM background context.
+
+        Narrow companion to :meth:`list_items` for callers that only need a
+        bounded, recency-windowed slice and no total count.
+        """
+        conditions = [IntelligenceItem.scope_type == "market"]
+        if market:
+            conditions.append(IntelligenceItem.market == market)
+        conditions.append(self._parseable_published_at_condition())
+        condition = self._recency_condition(days)
+        if condition is not None:
+            conditions.append(condition)
+        with self.db.get_session() as session:
+            return list(
+                session.execute(
+                    select(IntelligenceItem)
+                    .where(and_(*conditions))
+                    .order_by(
+                        desc(func.coalesce(IntelligenceItem.published_at, IntelligenceItem.fetched_at)),
+                        desc(IntelligenceItem.id),
+                    )
+                    .limit(self._bounded_item_limit(limit))
+                )
+                .scalars()
+                .all()
+            )
+
+    def list_candidate_items(
+        self,
+        *,
+        code: Optional[str] = None,
+        name: Optional[str] = None,
+        days: Optional[int] = None,
+        limit: int = 20,
+        market: Optional[str] = None,
+    ) -> List[IntelligenceItem]:
+        """Read-only: items tied to one candidate, newest first.
+
+        A candidate matches when either:
+
+        * ``scope_type='symbol'`` and ``scope_value`` equals ``code``, or
+        * ``scope_type='market'`` and the stock name appears in ``title`` /
+          ``summary`` (the case that catches a candidate mentioned inside
+          general market news).
+        """
+        conditions = []
+        if market:
+            conditions.append(IntelligenceItem.market == market)
+        conditions.append(self._parseable_published_at_condition())
+        match_conditions = []
+        normalized_code = _normalize_query_text(code)
+        if normalized_code:
+            match_conditions.append(
+                and_(
+                    IntelligenceItem.scope_type == "symbol",
+                    func.lower(IntelligenceItem.scope_value) == normalized_code.lower(),
+                )
+            )
+        normalized_name = _normalize_query_text(name)
+        if len(normalized_name) >= _MIN_NAME_MATCH_CHARS:
+            pattern = f"%{_escape_like(normalized_name)}%"
+            match_conditions.append(
+                and_(
+                    IntelligenceItem.scope_type == "market",
+                    or_(
+                        IntelligenceItem.title.like(pattern, escape=_LIKE_ESCAPE_CHAR),
+                        IntelligenceItem.summary.like(pattern, escape=_LIKE_ESCAPE_CHAR),
+                    ),
+                )
+            )
+        if not match_conditions:
+            return []
+        conditions.append(
+            match_conditions[0] if len(match_conditions) == 1 else or_(*match_conditions)
+        )
+        condition = self._recency_condition(days)
+        if condition is not None:
+            conditions.append(condition)
+        with self.db.get_session() as session:
+            return list(
+                session.execute(
+                    select(IntelligenceItem)
+                    .where(and_(*conditions))
+                    .order_by(
+                        desc(func.coalesce(IntelligenceItem.published_at, IntelligenceItem.fetched_at)),
+                        desc(IntelligenceItem.id),
+                    )
+                    .limit(self._bounded_item_limit(limit))
+                )
+                .scalars()
+                .all()
+            )
+
+    @staticmethod
+    def _recency_condition(days: Optional[int]) -> Optional[Any]:
+        """Recency filter over published_at with a fetched_at fallback."""
+        if days is None:
+            return None
+        try:
+            window = max(1, int(days))
+        except (TypeError, ValueError):
+            return None
+        cutoff = datetime.now() - timedelta(days=window)
+        return func.coalesce(IntelligenceItem.published_at, IntelligenceItem.fetched_at) >= cutoff
+
+    @staticmethod
+    def _parseable_published_at_condition() -> Any:
+        """Drop ``published_at`` values SQLAlchemy cannot materialise.
+
+        ``published_at`` is stored as TEXT in practice. SQLAlchemy's SQLite
+        ``DateTime`` result processor runs ``datetime.fromisoformat`` while
+        rows are materialised, so a single junk value (``''``, ``'garbage'``,
+        ``'2026/06/17 09:00'``) raises ``ValueError`` for the whole read and
+        silently voids the section. Filtering in SQL keeps the parseable rows
+        (including ``NULL``, which falls back to ``fetched_at``).
+
+        The GLOB check rejects non-ISO shapes; ``strftime`` returns ``NULL``
+        for shape-valid but calendar-invalid values such as ``2026-13-45``.
+        SQLite still normalises a few impossible dates (``2026-02-30``), so
+        this is defence in depth rather than a proof.
+        """
+        return or_(
+            IntelligenceItem.published_at.is_(None),
+            and_(
+                IntelligenceItem.published_at.op("GLOB")(_ISO_TIMESTAMP_GLOB),
+                func.strftime("%Y-%m-%d %H:%M:%S", IntelligenceItem.published_at).is_not(None),
+            ),
+        )
+
+    @staticmethod
+    def _bounded_item_limit(limit: int) -> int:
+        try:
+            return max(1, min(int(limit), 100))
+        except (TypeError, ValueError):
+            return 20
+
     @staticmethod
     def _normalize_scope_value(value: Any) -> str:
         normalized = str(value or "").strip()
@@ -207,3 +361,21 @@ class IntelligenceRepository:
             result = session.execute(delete(IntelligenceItem).where(IntelligenceItem.fetched_at < cutoff))
             session.commit()
             return int(result.rowcount or 0)
+
+
+def _normalize_query_text(value: Any) -> str:
+    """NFKC-fold query-side code/name text (``６００５１９`` -> ``600519``)."""
+    try:
+        text = unicodedata.normalize("NFKC", str(value or ""))
+    except (TypeError, ValueError):
+        text = str(value or "")
+    return text.strip()
+
+
+def _escape_like(value: str) -> str:
+    """Escape LIKE metacharacters so a name like ``%`` cannot match every row."""
+    return (
+        value.replace(_LIKE_ESCAPE_CHAR, _LIKE_ESCAPE_CHAR * 2)
+        .replace("%", f"{_LIKE_ESCAPE_CHAR}%")
+        .replace("_", f"{_LIKE_ESCAPE_CHAR}_")
+    )

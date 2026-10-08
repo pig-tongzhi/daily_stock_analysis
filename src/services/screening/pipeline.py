@@ -25,6 +25,7 @@ from src.services.screening.filter import (
     without_daily_filters,
 )
 from src.services.screening.industry import enrich_industry_concepts
+from src.services.screening.intelligence_context import build_market_intelligence_context
 from src.services.screening.models import Pick, ScreenResult
 from src.services.screening.normalize import (
     normalize_code,
@@ -83,7 +84,9 @@ def screen(
         candidate_context_files: Optional CSV/JSON/JSONL files keyed by code with candidate-level context.
         collect_llm_candidate_context: Whether to fetch Top-K candidate news/fund-flow context for LLM.
         candidate_context_max_candidates: Max candidates to fetch external context for.
-        candidate_context_providers: Optional provider names: news, fund_flow, announcement.
+        candidate_context_providers: Optional provider names: news, fund_flow,
+            announcement, intelligence. The ``intelligence`` provider reads the
+            local intelligence pool (DB-only, no network).
         industry_map_files: Optional code->industry/concepts files used before L1/L2.
         industry_provider: Optional provider for board mapping, e.g. "akshare".
         post_analyzers: Optional L3 analyzers, e.g. ["scorecard", "dsa"].
@@ -356,8 +359,38 @@ def screen(
         should_collect_candidate_context = (
             config.llm_candidate_context_enabled
             if collect_llm_candidate_context is None
-            else collect_llm_candidate_context
+            else bool(collect_llm_candidate_context)
         )
+        intelligence_provider_enabled = bool(config.intelligence_context_enabled)
+        if should_collect_candidate_context:
+            candidate_context_provider_list = (
+                list(candidate_context_providers)
+                if candidate_context_providers is not None
+                else list(config.llm_candidate_context_providers)
+            )
+        elif intelligence_provider_enabled and collect_llm_candidate_context is None:
+            # The local intelligence pool is a DB-only provider. Turning on just
+            # this flag must not switch on the network-backed providers, but an
+            # explicit provider list still wins over the ["intelligence"] default.
+            should_collect_candidate_context = True
+            candidate_context_provider_list = (
+                list(candidate_context_providers)
+                if candidate_context_providers is not None
+                else ["intelligence"]
+            )
+        else:
+            candidate_context_provider_list = []
+        # The master switch is authoritative: on adds the DB-only provider, off
+        # removes it even when the configured/explicit provider list names it.
+        if intelligence_provider_enabled:
+            if "intelligence" not in candidate_context_provider_list:
+                candidate_context_provider_list.append("intelligence")
+        else:
+            candidate_context_provider_list = [
+                provider
+                for provider in candidate_context_provider_list
+                if provider != "intelligence"
+            ]
         if should_collect_candidate_context:
             candidate_context_rows, candidate_context_errors = collect_candidate_context(
                 df_top,
@@ -365,13 +398,12 @@ def screen(
                     candidate_context_max_candidates
                     or config.llm_candidate_context_max_candidates
                 ),
-                providers=(
-                    candidate_context_providers
-                    if candidate_context_providers is not None
-                    else config.llm_candidate_context_providers
-                ),
+                providers=candidate_context_provider_list,
                 news_limit=config.llm_candidate_context_news_limit,
                 announcement_limit=config.llm_candidate_context_announcement_limit,
+                intelligence_limit=config.intelligence_context_candidate_limit,
+                intelligence_max_chars=config.intelligence_context_max_chars,
+                market=market,
                 cache_dir=(
                     config.data_dir / "candidate_context"
                     if config.llm_candidate_context_cache_enabled
@@ -391,6 +423,16 @@ def screen(
                     else ""
                 )
                 degradation.append(f"Candidate context row errors: {sample}{suffix}")
+        intelligence_market_context = ""
+        if intelligence_provider_enabled:
+            intelligence_market_context = build_market_intelligence_context(
+                limit=config.intelligence_context_max_items,
+                max_chars=config.intelligence_context_max_chars,
+                days=config.intelligence_context_days,
+                market=market,
+            )
+            if intelligence_market_context:
+                degradation.append("Local intelligence pool market context injected")
         llm_context_degradation: list[str] = []
         effective_context = build_llm_context(
             base_context=llm_context if llm_context is not None else config.llm_context,
@@ -400,6 +442,7 @@ def screen(
             snapshot_df=snapshot_df,
             candidate_df=df_top,
             event_profile=screening.event_profile,
+            intelligence_context=intelligence_market_context,
             max_chars=config.llm_context_max_chars,
             degradation=llm_context_degradation,
         )

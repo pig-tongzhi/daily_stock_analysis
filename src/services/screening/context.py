@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from src.services.screening.constants import MARKET_SECTION_TITLE
 from src.services.screening.normalize import normalize_code as _normalize_code
 
 _CONTEXT_TRIM_MARKER = "[context_trimmed]"
@@ -21,6 +22,7 @@ _CANDIDATE_CONTEXT_COLUMNS = {
     "fund_flow": "资金流",
     "fundflow": "资金流",
     "quote": "行情估值",
+    "intelligence": "本地资讯",
     "summary": "摘要",
     "context": "上下文",
     "context_summary": "压缩摘要",
@@ -55,6 +57,7 @@ def build_llm_context(
     snapshot_df: pd.DataFrame | None = None,
     candidate_df: pd.DataFrame | None = None,
     event_profile: dict[str, object] | None = None,
+    intelligence_context: str = "",
     max_chars: int = 4000,
     degradation: list[str] | None = None,
 ) -> str:
@@ -142,6 +145,17 @@ def build_llm_context(
             line_aware=True,
         ))
 
+    intelligence_block = _format_intelligence_context(intelligence_context)
+    if intelligence_block:
+        sections.append(_section(
+            intelligence_block,
+            kind="market_intelligence",
+            priority=4,
+            min_chars=160,
+            weight=2,
+            line_aware=True,
+        ))
+
     candidate_context = summarize_snapshot_context(candidate_df, title="候选池快照")
     if candidate_context:
         sections.append(_section(
@@ -165,6 +179,19 @@ def build_llm_context(
         ))
 
     return _join_bounded_context_sections(sections, max_chars=max_chars, degradation=degradation)
+
+
+def _format_intelligence_context(intelligence_context: str) -> str:
+    """Return the local-intelligence block, guaranteed to carry its own title."""
+    try:
+        body = str(intelligence_context or "").strip()
+    except Exception:  # noqa: BLE001 - context assembly must never break a screening run
+        return ""
+    if not body:
+        return ""
+    if body.startswith(MARKET_SECTION_TITLE):
+        return body
+    return f"{MARKET_SECTION_TITLE}\n{body}"
 
 
 def summarize_snapshot_context(df: pd.DataFrame | None, *, title: str) -> str:

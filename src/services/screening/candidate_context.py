@@ -14,6 +14,12 @@ from pathlib import Path
 import pandas as pd
 import requests
 
+from src.services.screening.intelligence_context import (
+    DEFAULT_CANDIDATE_LIMIT as _DEFAULT_INTELLIGENCE_LIMIT,
+    DEFAULT_CANDIDATE_MAX_CHARS as _DEFAULT_INTELLIGENCE_MAX_CHARS,
+    fetch_candidate_intelligence_summary,
+)
+
 _NEGATIVE_EVENT_KEYWORDS = {
     "减持": ("减持", "拟减持", "被动减持"),
     "监管": ("处罚", "立案", "监管函", "问询函", "警示函", "调查"),
@@ -44,6 +50,7 @@ _SOURCE_WEIGHTS = {
     "quote": 0.85,
     "news": 0.65,
     "fund_flow": 0.75,
+    "intelligence": 0.7,
 }
 _DEFAULT_MAX_WORKERS = 4
 
@@ -55,6 +62,9 @@ def collect_candidate_context(
     providers: list[str] | None = None,
     news_limit: int = 3,
     announcement_limit: int = 3,
+    intelligence_limit: int = _DEFAULT_INTELLIGENCE_LIMIT,
+    intelligence_max_chars: int = _DEFAULT_INTELLIGENCE_MAX_CHARS,
+    market: str | None = None,
     cache_dir: str | Path | None = None,
     cache_ttl_hours: int = 24,
     source_weights: dict[str, float] | None = None,
@@ -64,6 +74,14 @@ def collect_candidate_context(
     The function is optional and best-effort. It should never decide
     eligibility; it only supplies LLM research material for already shortlisted
     candidates.
+
+    ``providers`` accepts ``news``, ``announcement``, ``fund_flow``, ``quote``
+    and ``intelligence``. ``intelligence`` is the only DB-only provider: it
+    reads the local intelligence pool (by candidate code, or by stock name
+    appearing in market-scope news) instead of making network calls.
+    ``market`` optionally restricts pool reads to one market (the pipeline
+    passes its screening market); ``intelligence_max_chars`` bounds the
+    rendered per-candidate intelligence summary.
     """
     if candidate_df.empty or "code" not in candidate_df.columns or max_rows <= 0:
         return [], []
@@ -93,6 +111,9 @@ def collect_candidate_context(
                 providers=providers,
                 news_limit=news_limit,
                 announcement_limit=announcement_limit,
+                intelligence_limit=intelligence_limit,
+                intelligence_max_chars=intelligence_max_chars,
+                market=market,
                 cache_dir=cache_dir,
                 cache_ttl_hours=cache_ttl_hours,
                 source_weights=source_weights,
@@ -106,6 +127,9 @@ def collect_candidate_context(
                     providers=providers,
                     news_limit=news_limit,
                     announcement_limit=announcement_limit,
+                    intelligence_limit=intelligence_limit,
+                    intelligence_max_chars=intelligence_max_chars,
+                    market=market,
                     cache_dir=cache_dir,
                     cache_ttl_hours=cache_ttl_hours,
                     source_weights=source_weights,
@@ -140,11 +164,16 @@ def _collect_candidate_context_row(
     cache_dir: str | Path | None,
     cache_ttl_hours: int,
     source_weights: dict[str, float] | None,
+    intelligence_limit: int = _DEFAULT_INTELLIGENCE_LIMIT,
+    intelligence_max_chars: int = _DEFAULT_INTELLIGENCE_MAX_CHARS,
+    market: str | None = None,
 ) -> tuple[dict[str, object] | None, list[str]]:
     code = candidate["code"]
     errors: list[str] = []
     try:
-        cached = _read_cache(cache_dir, code, providers, cache_ttl_hours=cache_ttl_hours)
+        cached = _read_cache(
+            cache_dir, code, providers, cache_ttl_hours=cache_ttl_hours, market=market
+        )
         if cached is not None:
             _ensure_context_row_enrichment(
                 cached,
@@ -185,6 +214,19 @@ def _collect_candidate_context_row(
                     successful_sources.append("quote")
             except Exception as exc:
                 errors.append(f"{code} quote: {exc}")
+        if "intelligence" in providers:
+            try:
+                row["intelligence"] = fetch_candidate_intelligence_summary(
+                    code,
+                    candidate.get("name", ""),
+                    limit=intelligence_limit,
+                    max_chars=intelligence_max_chars,
+                    market=market,
+                )
+                if row["intelligence"]:
+                    successful_sources.append("intelligence")
+            except Exception as exc:
+                errors.append(f"{code} intelligence: {exc}")
         if any(value for key, value in row.items() if key not in {"code", "name"}):
             row["source_count"] = len(successful_sources)
             row["source_confidence"] = _source_confidence(successful_sources, providers)
@@ -200,7 +242,7 @@ def _collect_candidate_context_row(
                 source_weights=source_weights,
             )
             try:
-                _write_cache(cache_dir, code, providers, row)
+                _write_cache(cache_dir, code, providers, row, market=market)
             except Exception as exc:
                 errors.append(f"{code} cache: {exc}")
             return row, errors
@@ -497,6 +539,7 @@ def _summarize_row_context(row: dict[str, object]) -> str:
         ("announcement", "公告"),
         ("fund_flow", "资金流"),
         ("quote", "行情估值"),
+        ("intelligence", "本地资讯"),
     ):
         value = _compress_text(row.get(key), max_len=180)
         if value:
@@ -515,7 +558,7 @@ def _summarize_row_context(row: dict[str, object]) -> str:
 
 def _row_text(row: dict[str, object]) -> str:
     fields = []
-    for key in ("news", "announcement", "announcements", "fund_flow", "quote", "summary", "context", "text"):
+    for key in ("news", "announcement", "announcements", "fund_flow", "quote", "intelligence", "summary", "context", "text"):
         value = row.get(key)
         if value:
             fields.append(str(value))
@@ -532,6 +575,8 @@ def _successful_sources_from_row(row: dict[str, object]) -> list[str]:
         sources.append("fund_flow")
     if row.get("quote"):
         sources.append("quote")
+    if row.get("intelligence"):
+        sources.append("intelligence")
     return sources
 
 
@@ -550,11 +595,18 @@ def _compress_text(value: object, *, max_len: int) -> str:
     return cut.rstrip() + "..."
 
 
-def _cache_path(cache_dir: str | Path | None, code: str, providers: list[str]) -> Path | None:
+def _cache_path(
+    cache_dir: str | Path | None,
+    code: str,
+    providers: list[str],
+    *,
+    market: str | None = None,
+) -> Path | None:
     if cache_dir is None:
         return None
     key = "_".join(providers) or "none"
-    return Path(cache_dir) / f"{str(code).zfill(6)}_{key}.json"
+    market_key = str(market or "all").strip().lower() or "all"
+    return Path(cache_dir) / f"{str(code).zfill(6)}_{market_key}_{key}.json"
 
 
 def _read_cache(
@@ -563,8 +615,9 @@ def _read_cache(
     providers: list[str],
     *,
     cache_ttl_hours: int,
+    market: str | None = None,
 ) -> dict[str, object] | None:
-    path = _cache_path(cache_dir, code, providers)
+    path = _cache_path(cache_dir, code, providers, market=market)
     if path is None or not path.is_file() or cache_ttl_hours <= 0:
         return None
     try:
@@ -583,8 +636,10 @@ def _write_cache(
     code: str,
     providers: list[str],
     row: dict[str, object],
+    *,
+    market: str | None = None,
 ) -> None:
-    path = _cache_path(cache_dir, code, providers)
+    path = _cache_path(cache_dir, code, providers, market=market)
     if path is None:
         return
     path.parent.mkdir(parents=True, exist_ok=True)

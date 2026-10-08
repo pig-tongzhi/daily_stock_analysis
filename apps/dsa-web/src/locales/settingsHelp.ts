@@ -332,6 +332,14 @@ const settingsHelpZhCN: SettingsHelpMap = {
     impact: ['影响 Web 选股入口、策略读取和选股 API。'],
     notes: ['关闭时不影响原有分析、报告和通知流程。'],
   },
+  'settings.base.SCREENING_INTELLIGENCE_CONTEXT_ENABLED': {
+    title: '选股本地资讯上下文',
+    summary: '把本地资讯池（intelligence_items，由 RSSHub/NewsNow 源采集）注入选股 LLM 上下文。',
+    usage: '默认关闭。设为 true 后，选股会给全部候选追加市场级资讯段落，并按代码或股票名称匹配候选级资讯。',
+    valueNotes: ['只读本地资讯池，不会写入或改动资讯数据。', '资讯条数与字符数均有上限，避免挤占提示词预算。'],
+    impact: ['影响选股 LLM 重排实际看到的上下文，不影响确定性筛选结果。'],
+    notes: ['资讯池为空或读取失败时自动降级为无资讯上下文，不会中断选股。'],
+  },
   'settings.data_source.REALTIME_SOURCE_PRIORITY': {
     title: '实时行情源优先级',
     summary: '配置多个实时行情源的尝试顺序。',
@@ -1586,6 +1594,14 @@ const settingsHelpEnUS: SettingsHelpMap = {
     valueNotes: ['Screening output is for research support only and is not investment advice.'],
     impact: ['Affects the Web screening entry, strategy loading, and screening API.'],
     notes: ['Disabling it does not affect existing analysis, reports, or notifications.'],
+  },
+  'settings.base.SCREENING_INTELLIGENCE_CONTEXT_ENABLED': {
+    title: 'Screening Local Intelligence Context',
+    summary: 'Injects the local intelligence pool (intelligence_items, populated by RSSHub/NewsNow sources) into the screening LLM context.',
+    usage: 'Disabled by default. When enabled, every screening run adds a shared market-level news section and matches candidate-level items by stock code or stock name.',
+    valueNotes: ['Read-only: it never writes to or mutates the intelligence pool.', 'Both item count and characters are capped so prompt budget is preserved.'],
+    impact: ['Affects what the screening LLM ranker sees; deterministic screening results are unchanged.'],
+    notes: ['An empty pool or a DB error degrades to no intelligence context and never aborts a screening run.'],
   },
   'settings.data_source.REALTIME_SOURCE_PRIORITY': {
     title: 'Realtime Source Priority',

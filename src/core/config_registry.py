@@ -981,6 +981,36 @@ _FIELD_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             },
         ],
     },
+    "SCREENING_INTELLIGENCE_CONTEXT_ENABLED": {
+        "title": "Screening Local Intelligence Context",
+        "description": (
+            "Feed the local intelligence pool (intelligence_items, populated by RSSHub/NewsNow "
+            "sources) into the screening LLM context. Adds a shared market-level section and, "
+            "for each shortlisted candidate, the pool items matching its code or stock name. "
+            "Read-only and opt-in; disabled by default."
+        ),
+        "category": "base",
+        "data_type": "boolean",
+        "ui_control": "switch",
+        "is_sensitive": False,
+        "is_required": False,
+        "is_editable": True,
+        "default_value": "false",
+        "options": [],
+        "validation": {},
+        "display_order": 18,
+        "help_key": "settings.base.SCREENING_INTELLIGENCE_CONTEXT_ENABLED",
+        "examples": [
+            "SCREENING_INTELLIGENCE_CONTEXT_ENABLED=false",
+            "SCREENING_INTELLIGENCE_CONTEXT_ENABLED=true",
+        ],
+        "docs": [
+            {
+                "label": "选股说明",
+                "href": "https://github.com/ZhuLinsen/daily_stock_analysis/blob/main/docs/screening-engine.md",
+            },
+        ],
+    },
     "REALTIME_SOURCE_PRIORITY": {
         "title": "Realtime Source Priority",
         "description": "Comma-separated priority for realtime quote providers.",
