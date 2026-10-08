@@ -3,6 +3,7 @@ import { Component, Suspense } from 'react';
 import type { ErrorInfo } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
+import { isChunkLoadError, reloadForFreshBundle } from '../../utils/chunkReload';
 
 type PageLoadingFallbackProps = {
   fullPage?: boolean;
@@ -47,6 +48,12 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBo
 
   override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Route page failed to render or load', error, errorInfo);
+    // A rebuilt bundle leaves this page holding stale chunk URLs, which surfaces
+    // here as a failed dynamic import rather than anything the user did wrong.
+    // Reload once to pick up the new manifest; anything else keeps the card.
+    if (isChunkLoadError(error)) {
+      reloadForFreshBundle();
+    }
   }
 
   override componentDidUpdate(prevProps: RouteErrorBoundaryProps) {
