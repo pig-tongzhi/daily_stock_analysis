@@ -23,6 +23,7 @@ from src.data.stock_mapping import STOCK_NAME_MAP
 from src.services import name_to_code_resolver as ntc
 from src.services.name_to_code_resolver import (
     Stock,
+    local_name_to_code_map,
     resolve_name_to_code,
     resolver_name_to_code_list,
     US_stock_code_match,
@@ -897,3 +898,125 @@ class TestFetchAkshareDfWiring:
         assert captured["call_name"] == "stock_info_a_code_name"
         assert list(df["name"]) == ["浦发银行"]
 
+
+
+# ---------------------------------------------------------------------------
+# local_name_to_code_map 的非阻塞契约：聊天热路径首轮不得等待网络
+# ---------------------------------------------------------------------------
+
+
+class TestLocalNameToCodeMapNonBlocking:
+    """``local_name_to_code_map`` runs synchronously on every chat turn (via
+    ``resolve_stock_scope``), so its default must never spawn or await a fetch.
+
+    The hang stub releases itself after a bounded wait, so a regression that
+    reintroduces the block fails the elapsed-time assertion instead of hanging
+    the suite for the full 30s cold-start deadline.
+    """
+
+    @staticmethod
+    def _hanging_fetch(started: threading.Event, release: threading.Event):
+        def fetch():
+            started.set()
+            release.wait(timeout=5)
+            return pd.DataFrame({"code": ["600000"], "name": ["浦发银行"]})
+
+        return fetch
+
+    @pytest.mark.usefixtures("real_akshare_path")
+    def test_default_returns_promptly_without_spawning_a_fetch(self, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+        monkeypatch.setattr(
+            ntc, "_fetch_akshare_df", self._hanging_fetch(started, release)
+        )
+
+        try:
+            begin = time.monotonic()
+            result = local_name_to_code_map()
+            elapsed = time.monotonic() - begin
+        finally:
+            release.set()
+
+        assert elapsed < 1.0, f"cold default blocked for {elapsed:.2f}s"
+        assert result  # built-in table still serves
+        assert "浦发银行" not in result  # cold: nothing was fetched
+        assert not started.is_set(), "default path must not spawn a fetch"
+        assert ntc._akshare_inflight is None
+
+    @pytest.mark.usefixtures("real_akshare_path")
+    def test_stale_cache_is_served_without_waiting(self, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+        monkeypatch.setattr(
+            ntc, "_fetch_akshare_df", self._hanging_fetch(started, release)
+        )
+        ntc._akshare_cache = (
+            time.time() - ntc._AKSHARE_CACHE_TTL - 10,
+            {"浦发银行": "600000"},
+        )
+
+        try:
+            begin = time.monotonic()
+            result = local_name_to_code_map()
+            elapsed = time.monotonic() - begin
+        finally:
+            release.set()
+
+        assert elapsed < 1.0
+        assert result["浦发银行"] == "600000"
+        assert not started.is_set()
+
+    @pytest.mark.usefixtures("real_akshare_path")
+    def test_wait_for_fetch_opt_in_restores_blocking_behaviour(self, monkeypatch):
+        fake = _FakeAkShareFetch()
+        monkeypatch.setattr(ntc, "_fetch_akshare_df", fake.fetch)
+
+        outcome: dict = {}
+
+        def worker():
+            outcome["value"] = local_name_to_code_map(wait_for_fetch=True)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        try:
+            assert fake.fetch_started.wait(timeout=5)
+            thread.join(timeout=0.3)
+            assert thread.is_alive(), "opt-in must wait for the fetch result"
+        finally:
+            fake.release_fetch.set()
+            thread.join(timeout=10)
+
+        assert not thread.is_alive()
+        assert outcome["value"]["浦发银行"] == "600000"
+
+
+class TestStockNameIndexNonBlocking:
+    """``src.agent.stock_scope._stock_name_index`` builds on top of the local
+    map, so a cold first turn must not stall on the 30s cold-start deadline."""
+
+    @pytest.mark.usefixtures("real_akshare_path")
+    def test_cold_build_returns_promptly_with_fetch_stubbed_to_hang(self, monkeypatch):
+        import src.agent.stock_scope as stock_scope
+
+        monkeypatch.setattr(stock_scope, "_name_index_cache", None)
+        started = threading.Event()
+        release = threading.Event()
+
+        def fetch():
+            started.set()
+            release.wait(timeout=5)
+            return pd.DataFrame({"code": ["600000"], "name": ["浦发银行"]})
+
+        monkeypatch.setattr(ntc, "_fetch_akshare_df", fetch)
+
+        try:
+            begin = time.monotonic()
+            index = stock_scope._stock_name_index()
+            elapsed = time.monotonic() - begin
+        finally:
+            release.set()
+
+        assert elapsed < 1.0, f"cold index build blocked for {elapsed:.2f}s"
+        assert index  # built-in table
+        assert not started.is_set()

@@ -236,44 +236,147 @@ _NAME_INDEX_TTL_SECONDS = 300
 # company name in a request ("更宁德时代" is not something anyone types), so a
 # degree adverb immediately before a match means it is prose. 比 is deliberately
 # absent: "比茅台好" genuinely refers to 茅台.
+# Scope *switching* no longer depends on this hack (see the corroboration rule
+# below), but the compare/extraction path still does: an uncorroborated match is
+# still a candidate there, so removing it would put 300785 into the allowed set
+# of "AAPL 和 TSLA 哪个更值得买".
 _NAME_DEGREE_PREFIXES = frozenset("更最很挺太超蛮颇极")
 
+# A name match may re-pin the session only when the message reads as an explicit
+# request for that stock: a switch/analysis verb sits immediately before the
+# name, allowing at most the two short function words a request puts between verb
+# and object ("分析一下宁德时代", "看看这只比亚迪"), and what follows the name is
+# the attribute or question the request is *about*.
+#
+# Both halves are needed because Chinese company names are also ordinary prose:
+#
+#   * The verb half alone rejects "祝你步步高升" / "好想你" / "三人行，必有我师" /
+#     "这个人很有大智慧" — no request verb precedes the match.
+#   * The tail half rejects "帮我看看步步高升的概率", the one trap the verb half
+#     cannot see: 步步高 (002251) is the first three characters of the idiom
+#     步步高升, and the verb 看看 does sit right in front of it. Prose continues
+#     with whatever the sentence needs (升的概率); a request continues with the
+#     stock attribute it asks about (的走势). A bounded tail is therefore accepted
+#     only when it *opens* with such an attribute or question.
+#
+# "Ends its CJK run" is the degenerate case of the tail half (nothing follows, or
+# only the run's ASCII suffix "万科A"). It is kept as the strict form for the
+# first-turn branch, which has no current stock to fall back on and therefore
+# must not invent a lock from a phrase like "帮我看看步步高升的概率"; the
+# mid-session branch additionally accepts an attribute tail, because there the
+# alternative to switching is blocking tool calls for the named stock (see the
+# stock_scope_violation comment at the top of this section).
+#
+# Compare requests are unaffected: they widen the allowed set via
+# _is_compare_message() rather than switching the expected code, so their names
+# need neither a verb nor a tail ("宁德时代和比亚迪哪个好").
+#
+# Every quantifier below is bounded on purpose: an unbounded `*` over overlapping
+# alternatives is a backtracking hazard on adversarial input. The two windows are
+# bounded too, so a match costs O(1) regardless of message length: the verb sits
+# a few characters before the name (64 leaves room for a long run of spaces) and
+# a request's attribute/question sits a few characters after it (12 covers the
+# longest lead-in "可不可以" plus the longest topic "什么情况").
+_SWITCH_VERB_WINDOW_CHARS = 64
+_SWITCH_TAIL_WINDOW_CHARS = 12
+_SWITCH_VERB_FILLERS = r"(?:一下|一看|了解|看看|看|下|这|那|个|只|支|家|的|一){0,2}"
+_SWITCH_VERB_ADJACENT_PATTERN = re.compile(
+    r"(?:换成|改看|分析|看看|研究|诊断)"
+    + _SWITCH_VERB_FILLERS
+    + r"\s*$"
+)
+# Short attributive lead-ins a request may put between the name and its
+# attribute ("宁德时代的走势", "宁德时代现在多少钱").
+_SWITCH_TAIL_LEADS = (
+    r"(?:的|之|现在|目前|近期|最近|近|今天|明天|后续|接下来|未来|一下|"
+    r"这个|这只|这支|该|它)"
+)
+# Interrogative openers: whatever follows is the user's question, so any bounded
+# tail is accepted after one of these ("是不是高估了", "为什么会跌").
+_SWITCH_TAIL_QUESTION_LEADS = (
+    r"(?:是不是|有没有|会不会|能不能|可不可以|值不值得|是否|为什么|怎么会|"
+    r"还能|到底|究竟|大概|大约)"
+)
+# What a *request* asks about. Deliberately a vocabulary rather than a length
+# bound: "升的概率" is short too, so length alone cannot separate the two.
+_SWITCH_TAIL_TOPICS = (
+    r"(?:"
+    r"走势|行情|股价|价格|价位|估值|市值|市盈率|市净率|基本面|技术面|"
+    r"消息面|资金面|财报|报表|财务|业绩|盈利|营收|利润|分红|股息|"
+    r"三季报|一季报|中报|年报|季报|K线|k线|日线|周线|月线|分时|均线|"
+    r"指标|成交量|量能|换手|资金|趋势|前景|未来|机会|风险|问题|逻辑|"
+    r"原因|支撑|压力|新闻|公告|消息|事件|板块|概念|股票|表现|情况|"
+    r"怎么样|怎样|咋样|如何|好不好|行不行|行吗|好吗|能买吗|该买吗|"
+    r"能不能买|值得买吗|多少钱|现价|怎么走|什么情况|怎么看|怎么办|"
+    r"能买|多少|K|k"
+    r")"
+)
+# Anchored at the start of the tail only: what comes after the attribute is the
+# rest of the user's sentence ("的走势怎么样"), so trailing text is allowed. The
+# opener is what carries the signal.
+_SWITCH_TAIL_PATTERN = re.compile(
+    r"^(?:(?:"
+    + _SWITCH_TAIL_LEADS
+    + r")?"
+    + _SWITCH_TAIL_TOPICS
+    + r"|"
+    + _SWITCH_TAIL_QUESTION_LEADS
+    + r")"
+)
+
 _name_index_lock = threading.Lock()
+# Single-flight for the expensive build. The fast path only needs
+# _name_index_lock (a cache read); concurrent cold callers serialize on
+# _name_index_build_lock, so exactly one builds and the rest reuse the result it
+# publishes. The build itself runs outside _name_index_lock, so it can never
+# re-enter it.
+_name_index_build_lock = threading.Lock()
 _name_index_cache: Optional[Tuple[float, Dict[str, str]]] = None
 
 
 def _stock_name_index() -> Dict[str, str]:
     """Cached name->code index; empty when the resolver is unavailable."""
     global _name_index_cache
-    now = time.time()
     with _name_index_lock:
         cached = _name_index_cache
-        if cached is not None and (now - cached[0]) < _NAME_INDEX_TTL_SECONDS:
+        if cached is not None and (time.time() - cached[0]) < _NAME_INDEX_TTL_SECONDS:
             return cached[1]
-    index: Dict[str, str] = {}
-    try:
-        from src.services.name_to_code_resolver import local_name_to_code_map
+    # Cold or expired: only one thread pays for the build; the others block
+    # here and then observe the freshly published cache.
+    with _name_index_build_lock:
+        now = time.time()
+        with _name_index_lock:
+            cached = _name_index_cache
+            if cached is not None and (now - cached[0]) < _NAME_INDEX_TTL_SECONDS:
+                return cached[1]
+        index: Dict[str, str] = {}
+        try:
+            from src.services.name_to_code_resolver import local_name_to_code_map
 
-        index = local_name_to_code_map() or {}
-    except Exception as exc:  # fail open: code matching keeps working
-        index = {}
-        logger.debug("Stock name index unavailable; name matching disabled: %s", exc)
-    with _name_index_lock:
-        _name_index_cache = (now, index)
-    return index
+            index = local_name_to_code_map() or {}
+        except Exception as exc:  # fail open: code matching keeps working
+            index = {}
+            logger.debug("Stock name index unavailable; name matching disabled: %s", exc)
+        with _name_index_lock:
+            _name_index_cache = (now, index)
+        return index
 
 
-def _names_in_run(run: str, index: Dict[str, str], normalize) -> List[str]:
-    """Longest-match, non-overlapping name lookup inside one CJK run.
+def _name_matches_in_run(
+    run: str, index: Dict[str, str], normalize
+) -> List[Tuple[str, int, int]]:
+    """Longest-match, non-overlapping lookups inside one CJK run.
 
-    Longest first plus overlap suppression is what keeps short fragments from
-    inventing entities: a 2-character window inside a longer name would
-    otherwise produce a wrong code whenever that fragment happens to be a real
-    (different) stock name.
+    Returns ``(code, start, end)`` triples whose offsets are relative to *run*,
+    so callers can reason about the match position (see
+    :func:`_corroborated_name_codes`). Longest first plus overlap suppression is
+    what keeps short fragments from inventing entities: a 2-character window
+    inside a longer name would otherwise produce a wrong code whenever that
+    fragment happens to be a real (different) stock name.
     """
     length = len(run)
     taken = [False] * length
-    found: List[str] = []
+    found: List[Tuple[str, int, int]] = []
     for size in range(min(_NAME_MAX_LEN, length), _NAME_MIN_LEN - 1, -1):
         for start in range(0, length - size + 1):
             if any(taken[start:start + size]):
@@ -283,10 +386,84 @@ def _names_in_run(run: str, index: Dict[str, str], normalize) -> List[str]:
             code = index.get(normalize(run[start:start + size]))
             if not code:
                 continue
-            found.append(code)
+            found.append((code, start, start + size))
             for position in range(start, start + size):
                 taken[position] = True
     return found
+
+
+def _corroborated_name_codes(
+    text: str, *, allow_attribute_tail: bool = False
+) -> Set[str]:
+    """Name-matched codes the message names explicitly, not in passing prose.
+
+    A match counts only when both hold:
+
+    * a switch/analysis verb (plus at most a short function word) sits right
+      before it (``看看宁德时代`` / ``分析万科A`` / ``分析一下宁德时代``); and
+    * what follows it reads as the object of that request: either nothing but the
+      run's ASCII suffix (``万科A``), or — with ``allow_attribute_tail`` — a
+      bounded tail that opens with the stock attribute or question being asked
+      about (``看看宁德时代的走势`` / ``诊断一下宁德时代的问题``).
+
+    ``allow_attribute_tail`` is the mid-session relaxation. It is off for the
+    first-turn branch, where a name match alone would fabricate a lock: the
+    idiom in ``帮我看看步步高升的概率`` passes the verb half, so only the strict
+    "nothing follows the name" test keeps that turn scopeless.
+    """
+    if not text:
+        return set()
+    runs = list(_CJK_RUN_PATTERN.finditer(text))
+    if not runs:
+        return set()
+    index = _stock_name_index()
+    if not index:
+        return set()
+    try:
+        from src.services.name_to_code_resolver import normalize_stock_name
+    except Exception:
+        return set()
+    corroborated: Set[str] = set()
+    for run_match in runs:
+        run = run_match.group(0)
+        run_start = run_match.start()
+        run_end = run_match.end()
+        for code, start, end in _name_matches_in_run(run, index, normalize_stock_name):
+            if run_start + end != run_end:
+                # Mid-session the name may be followed by the attribute the user
+                # asks about. The tail is bounded (constant window) and must
+                # *start* with that attribute, not with an arbitrary continuation
+                # of a longer phrase.
+                if not allow_attribute_tail:
+                    continue
+                tail = run[end:end + _SWITCH_TAIL_WINDOW_CHARS]
+                if not _SWITCH_TAIL_PATTERN.match(tail):
+                    continue
+            name_start = run_start + start
+            prefix = text[max(0, name_start - _SWITCH_VERB_WINDOW_CHARS):name_start]
+            if not _SWITCH_VERB_ADJACENT_PATTERN.search(prefix):
+                continue
+            corroborated.add(code)
+    return corroborated
+
+
+def _trusted_switch_candidates(
+    text: str,
+    candidates: List[str],
+    registry: Optional[Any] = None,
+    *,
+    allow_attribute_tail: bool = False,
+) -> Set[str]:
+    """Candidates that may *re-pin* the session as a scope switch.
+
+    Explicit codes are always trusted — they are unambiguous. A Chinese-name
+    match needs corroboration, because company names are also ordinary prose.
+    """
+    trusted = set(extract_stock_codes(text, registry))
+    trusted.update(
+        _corroborated_name_codes(text, allow_attribute_tail=allow_attribute_tail)
+    )
+    return trusted & set(candidates)
 
 
 def extract_stock_mentions(text: str, registry: Optional[Any] = None) -> List[str]:
@@ -313,7 +490,7 @@ def extract_stock_mentions(text: str, registry: Optional[Any] = None) -> List[st
     except Exception:
         return candidates
     for run in runs:
-        for code in _names_in_run(run, index, normalize_stock_name):
+        for code, _start, _end in _name_matches_in_run(run, index, normalize_stock_name):
             if code not in candidates:
                 candidates.append(code)
     return candidates
@@ -398,15 +575,28 @@ def resolve_stock_scope(
     if not current_code:
         if invalid_context_code or strict_initial_scope:
             candidates = extract_stock_mentions(message_text, registry)
-            if strict_initial_scope and not invalid_context_code and not candidates:
+            trusted = _trusted_switch_candidates(message_text, candidates, registry)
+            if len(candidates) >= 2:
+                # A message naming two stocks is a comparison regardless of how
+                # each name was corroborated.
+                allowed = set(candidates)
+                expected = ""
+            elif len(candidates) == 1 and candidates[0] in trusted:
+                allowed = {candidates[0]}
+                expected = candidates[0]
+            else:
+                # An uncorroborated name is ordinary prose, not a target: keep
+                # the "no candidates" behaviour rather than fabricating a scope
+                # that could lock the session to an unrelated stock.
+                allowed = set()
+                expected = ""
+            if strict_initial_scope and not invalid_context_code and not allowed:
                 return StockScopeResolution(
                     effective_context=_with_skills(original_context, skills),
                     stock_scope=None,
                 )
-            allowed = set(candidates)
-            expected = candidates[0] if len(candidates) == 1 else ""
             effective_context = dict(original_context)
-            mode = "switch" if expected else ("compare" if len(candidates) > 1 else "maintain")
+            mode = "switch" if expected else ("compare" if len(allowed) > 1 else "maintain")
             if expected:
                 effective_context["stock_code"] = expected
                 effective_context["stock_name"] = ""
@@ -434,10 +624,14 @@ def resolve_stock_scope(
         mode = "compare"
         allowed.update(candidates)
     elif _SWITCH_PATTERN.search(message_text) and len(new_candidates) == 1:
-        mode = "switch"
-        expected = new_candidates[0]
-        allowed = {expected}
-        effective_context = _switch_context(original_context, expected)
+        trusted = _trusted_switch_candidates(
+            message_text, candidates, registry, allow_attribute_tail=True
+        )
+        if new_candidates[0] in trusted:
+            mode = "switch"
+            expected = new_candidates[0]
+            allowed = {expected}
+            effective_context = _switch_context(original_context, expected)
 
     effective_context["stock_code"] = expected if mode == "switch" else current_code
     effective_context = _with_skills(effective_context, skills)

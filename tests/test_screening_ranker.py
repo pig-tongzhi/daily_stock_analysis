@@ -9,7 +9,12 @@ from unittest.mock import patch
 
 from src.llm.generation_params import clear_litellm_generation_param_recovery_cache
 from src.services.screening.models import Pick
-from src.services.screening.ranker import _call_llm, rank_candidates_with_metadata
+from src.services.screening.ranker import (
+    _call_llm,
+    _looks_like_truncated_json,
+    _salvage_ranking_objects,
+    rank_candidates_with_metadata,
+)
 
 
 def _response(content: str = "ok") -> SimpleNamespace:
@@ -460,3 +465,137 @@ def test_rank_candidates_with_metadata_keeps_no_json_found_for_prose() -> None:
     assert result.ranked is False
     assert any("no_json_found" in error for error in result.errors)
     assert not any("truncated_json" in error for error in result.errors)
+
+
+def test_looks_like_truncated_json_finds_structure_after_prose_or_bare_fence() -> None:
+    """The JSON need not start the response: models announce the result first.
+
+    Demanding that the first non-space character be ``{``/``[`` classified these
+    genuine truncations as "no_json_found", which hides the real remedy.
+    """
+    assert (
+        _looks_like_truncated_json(
+            '好的，以下是排序结果：\n```json\n{"ranked":[{"code":"601166"'
+        )
+        is True
+    )
+    assert (
+        _looks_like_truncated_json('好的，结果如下：{"ranked":[{"code":"601166"')
+        is True
+    )
+    # A bare opening fence with no newline and no closing fence.
+    assert _looks_like_truncated_json('```{"a":') is True
+    # Prose with no opening brace stays on the original error code.
+    assert _looks_like_truncated_json("抱歉，我无法按要求输出 JSON。") is False
+    assert _looks_like_truncated_json("") is False
+    # Complete JSON followed by prose is not a truncation.
+    assert _looks_like_truncated_json('{"ranked":[]}\n以上是排序结果。') is False
+
+
+def test_rank_candidates_with_metadata_labels_prose_prefixed_truncation() -> None:
+    """A truncated ranking prefixed by prose is still a truncation, not prose."""
+    candidates = [Pick(rank=1, code="601166", name="兴业银行", final_score=90.0, screen_score=90.0)]
+    truncated = (
+        '好的，以下是排序结果：\n```json\n'
+        '{"ranked":[{"code":"601166","llm_score":82,"thesis":"低估值修复'
+    )
+
+    with patch("src.services.screening.ranker._call_llm", return_value=truncated):
+        result = rank_candidates_with_metadata(
+            candidates,
+            "test hints",
+            "test-key",
+            "deepseek/deepseek-chat",
+            fallback_models=[],
+            max_retries=0,
+        )
+
+    assert result.ranked is False
+    assert any("truncated_json" in error for error in result.errors)
+    assert not any("no_json_found" in error for error in result.errors)
+
+
+def test_rank_candidates_with_metadata_salvages_partial_ranking_from_truncation() -> None:
+    """The positive salvage path: a response cut off mid-object still ranks.
+
+    The tests above only pin the unusable truncation (the *first* object was the
+    one cut). When the cut lands after some candidates were emitted, their
+    objects are complete JSON and the ranking is recoverable in part — silently
+    discarding them would drop the whole section back to factor-only ordering.
+    """
+    codes = ["600519", "000001", "600036", "601318", "000858"]
+    candidates = [
+        Pick(rank=index + 1, code=code, name=code, final_score=90.0 - index, screen_score=90.0 - index)
+        for index, code in enumerate(codes)
+    ]
+    complete = _ranking_response(*codes)
+    # Cut inside the fifth object: four candidates survive, the tail does not.
+    truncated = complete[: complete.index('"000858"') + len('"000858"')]
+
+    with patch("src.services.screening.ranker._call_llm", return_value=truncated):
+        result = rank_candidates_with_metadata(
+            candidates,
+            "test hints",
+            "test-key",
+            "deepseek/deepseek-chat",
+            fallback_models=[],
+            min_coverage=0.60,
+            max_retries=0,
+        )
+
+    assert result.ranked is True
+    assert result.coverage == 0.8
+    assert result.errors == ["json_repaired:salvaged_truncated"]
+    # The four salvaged picks keep their LLM fields; the unmatched fifth is still
+    # appended so the section never loses a candidate.
+    assert [pick.code for pick in result.picks[:4]] == codes[:4]
+    assert result.picks[0].llm_score == 90.0
+    assert result.picks[1].ranking_reason == "reason-000001"
+    assert sorted(pick.code for pick in result.picks) == sorted(codes)
+
+
+def test_salvage_ranking_objects_keeps_each_candidate_once_at_its_own_level() -> None:
+    """A wrapper object that encloses a candidate is not itself a candidate.
+
+    Returning both made the wrapper's own code race the pick nested inside it and
+    left the duplicate for the caller to drop as duplicate_code/unknown_code.
+    """
+    errors: list[str] = []
+    objects = _salvage_ranking_objects(
+        '{"code": "OUT", "ranked": [{"code": "IN"}]}',
+        errors,
+    )
+
+    assert [item["code"] for item in objects] == ["IN"]
+    # The payload is complete: only a genuine truncation may carry that label.
+    assert errors == []
+
+    errors = []
+    objects = _salvage_ranking_objects(
+        '{"code": "OUT", "ranked": [{"code": "IN"}, {"code": "PART',
+        errors,
+    )
+
+    assert [item["code"] for item in objects] == ["IN"]
+    assert errors == ["json_repaired:salvaged_truncated"]
+
+
+def test_ranker_max_tokens_defaults_match_the_screening_config_default() -> None:
+    """Signature defaults that disagree with the config are a silent trap: a
+    future caller that omits max_tokens would cut the ranking budget back to a
+    quarter of its configured size."""
+    import inspect
+
+    from src.services.screening.config import Config as ScreeningConfig
+    from src.services.screening.ranker import (
+        _DEFAULT_LLM_MAX_TOKENS,
+        _call_litellm_router,
+        rank_candidates,
+    )
+
+    assert _DEFAULT_LLM_MAX_TOKENS == ScreeningConfig().llm_max_tokens == 8192
+    for function in (rank_candidates, rank_candidates_with_metadata, _call_llm, _call_litellm_router):
+        assert (
+            inspect.signature(function).parameters["max_tokens"].default
+            == _DEFAULT_LLM_MAX_TOKENS
+        ), function.__name__

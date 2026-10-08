@@ -3,6 +3,7 @@
 # Licensed under Apache-2.0 and modified for daily_stock_analysis.
 """Configuration."""
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,12 +18,17 @@ from src.config import (
 )
 from src.llm.hermes import is_reserved_hermes_name
 
+logger = logging.getLogger(__name__)
+
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_POST_ANALYZERS = ["scorecard"]
 DEFAULT_LLM_MODEL = "gemini/gemini-2.5-flash"
 DEFAULT_SNAPSHOT_SOURCE_PRIORITY = ["sina", "efinance", "akshare_em", "em_datacenter"]
 TUSHARE_FIRST_SOURCE_PRIORITY = ["tushare", "sina", "efinance", "akshare_em", "em_datacenter"]
+# Upper bound for SCREENING_INTELLIGENCE_CONTEXT_MAX_CHARS. Mirrors the ceiling
+# enforced by src/config.py; the section is also bounded by llm_context_max_chars.
+MAX_INTELLIGENCE_CONTEXT_MAX_CHARS = 4000
 _ENV_FILE_CACHE: dict[Path, tuple[tuple[int, int], dict[str, str]]] = {}
 _APPLIED_ENV_FILE_VALUES: dict[str, str] = {}
 
@@ -102,6 +108,31 @@ def _parse_bool_env(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_int_env(
+    name: str,
+    default: int,
+    *,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
+    """Parse a positive int env value, warning + falling back instead of raising."""
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        parsed = int(raw.strip())
+    except (TypeError, ValueError):
+        logger.warning("%s=%r is not a valid integer; falling back to %s", name, raw, default)
+        return default
+    if parsed < minimum:
+        logger.warning("%s=%r is below %s; using %s", name, raw, minimum, minimum)
+        parsed = minimum
+    if maximum is not None and parsed > maximum:
+        logger.warning("%s=%r is above %s; using %s", name, raw, maximum, maximum)
+        parsed = maximum
+    return parsed
+
+
 def _parse_csv_env(name: str, default: list[str] | None = None) -> list[str]:
     value = os.getenv(name)
     if value is None:
@@ -172,6 +203,13 @@ class Config:
     llm_candidate_context_announcement_limit: int = 3
     llm_candidate_context_cache_enabled: bool = True
     llm_candidate_context_cache_ttl_hours: int = 24
+    # Local intelligence pool (intelligence_items) injection into L2 context.
+    # Off by default: screening must keep working with zero local news.
+    intelligence_context_enabled: bool = False
+    intelligence_context_max_items: int = 6
+    intelligence_context_max_chars: int = 800
+    intelligence_context_days: int = 7
+    intelligence_context_candidate_limit: int = 3
     llm_temperature: float = 0.2
     llm_json_mode: bool = True
     llm_silent: bool = True
@@ -182,7 +220,12 @@ class Config:
     llm_min_coverage: float = 0.60
     llm_context_max_chars: int = 4000
     llm_timeout_sec: float = 60.0
-    llm_max_tokens: int = 2048
+    # The ranking schema is per-candidate free text (~850 chars measured for a
+    # realistic candidate) and the default shortlist is llm_max_candidates=30,
+    # so 2048 truncated the JSON mid-object and the re-rank silently degraded to
+    # factor-only ordering. Truncated responses are now partly salvageable, but
+    # the budget still has to cover the pool.
+    llm_max_tokens: int = 8192
 
     # Snapshot data source priority
     snapshot_source_priority: list[str] = field(
@@ -307,6 +350,24 @@ class Config:
                 0,
                 int(os.getenv("LLM_CANDIDATE_CONTEXT_CACHE_TTL_HOURS", "24")),
             ),
+            intelligence_context_enabled=_parse_bool_env(
+                "SCREENING_INTELLIGENCE_CONTEXT_ENABLED", False
+            ),
+            intelligence_context_max_items=_parse_int_env(
+                "SCREENING_INTELLIGENCE_CONTEXT_MAX_ITEMS", 6
+            ),
+            intelligence_context_max_chars=_parse_int_env(
+                "SCREENING_INTELLIGENCE_CONTEXT_MAX_CHARS",
+                800,
+                minimum=80,
+                maximum=MAX_INTELLIGENCE_CONTEXT_MAX_CHARS,
+            ),
+            intelligence_context_days=_parse_int_env(
+                "SCREENING_INTELLIGENCE_CONTEXT_DAYS", 7
+            ),
+            intelligence_context_candidate_limit=_parse_int_env(
+                "SCREENING_INTELLIGENCE_CONTEXT_CANDIDATE_LIMIT", 3
+            ),
             llm_temperature=_parse_float_env("LLM_TEMPERATURE", 0.2),
             llm_json_mode=_parse_bool_env("LLM_JSON_MODE", True),
             llm_silent=_parse_bool_env("LLM_SILENT", True),
@@ -317,7 +378,7 @@ class Config:
             llm_min_coverage=_parse_float_env("LLM_MIN_COVERAGE", 0.60),
             llm_context_max_chars=max(500, int(os.getenv("LLM_CONTEXT_MAX_CHARS", "4000"))),
             llm_timeout_sec=max(1.0, _parse_float_env("LLM_TIMEOUT_SEC", 60.0)),
-            llm_max_tokens=max(1, int(os.getenv("LLM_MAX_TOKENS", "2048"))),
+            llm_max_tokens=max(1, int(os.getenv("LLM_MAX_TOKENS", "8192"))),
             snapshot_source_priority=_resolve_snapshot_source_priority(),
             fallback_snapshot_path=fallback_snapshot_path,
             snapshot_cache_ttl_seconds=max(

@@ -1456,3 +1456,61 @@ class TestPreprocessPipeline:
     def test_returns_original_text(self):
         text, _ = _preprocess_text("分析一下600519.SH")
         assert text == "分析一下600519.SH"
+
+
+# ---------------------------------------------------------------------------
+# extract_stock_codes 的"不查库"契约
+# ---------------------------------------------------------------------------
+
+
+class TestExtractStockCodesNoDatabaseContract:
+    """``web_intent_tokenizer`` imports ``extract_stock_codes`` because it is a
+    pure format check that must not query the database (see the comment at the
+    import site). Only that comment encoded the contract; these tests pin it so
+    a regression that routes name lookups (and with them ``stockDB`` / the
+    AkShare resolver) through the code path fails loudly.
+    """
+
+    def test_name_only_message_yields_no_code_and_never_touches_the_name_index(self):
+        from src.agent.stock_scope import extract_stock_codes
+
+        with patch(
+            "src.agent.stock_scope._stock_name_index",
+            side_effect=AssertionError(
+                "extract_stock_codes must stay a pure format check"
+            ),
+        ):
+            assert extract_stock_codes("看看宁德时代") == []
+            # The code-shaped path still works and still does not touch names.
+            assert extract_stock_codes("看看 300750") == ["300750"]
+
+    def test_importing_stock_scope_does_not_import_the_name_resolver(self):
+        # Must run in a clean interpreter: this test module itself imports the
+        # resolver, so an in-process sys.modules assertion would be flaky.
+        import os
+        import subprocess
+        import sys
+
+        script = (
+            "import sys\n"
+            "import src.agent.stock_scope\n"
+            "leaked = sorted(m for m in sys.modules if 'name_to_code' in m)\n"
+            "assert not leaked, leaked\n"
+            "print('ok')\n"
+        )
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key.lower() not in {"http_proxy", "https_proxy"}
+        }
+        env["NO_PROXY"] = "*"
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert "ok" in completed.stdout

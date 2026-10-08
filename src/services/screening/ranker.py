@@ -29,6 +29,13 @@ def _normalize_code(value: object) -> str:
 logger = logging.getLogger(__name__)
 _DEFAULT_RANKING_PROMPT_MAX_CHARS = 24_000
 _PROMPT_TRIM_MARKER = "[prompt_trimmed]"
+# Same concept and same value as ScreeningConfig.llm_max_tokens
+# (src/services/screening/config.py, env LLM_MAX_TOKENS). Every caller in the
+# pipeline passes max_tokens explicitly, so these signature defaults are never
+# used today; they used to say 2048, which would silently re-truncate the ranking
+# JSON the moment a caller omitted the argument. tests/test_screening_ranker.py
+# pins the value against the config default so the two cannot drift again.
+_DEFAULT_LLM_MAX_TOKENS = 8192
 
 
 @dataclass
@@ -80,7 +87,7 @@ def rank_candidates(
     config_path: str = "",
     timeout_sec: float = 60.0,
     max_prompt_chars: int | None = _DEFAULT_RANKING_PROMPT_MAX_CHARS,
-    max_tokens: int | None = 2048,
+    max_tokens: int | None = _DEFAULT_LLM_MAX_TOKENS,
 ) -> list[Pick]:
     """Use LLM to re-rank candidates and add ranking_reason / risk_summary.
 
@@ -128,7 +135,7 @@ def rank_candidates_with_metadata(
     timeout_sec: float = 60.0,
     max_prompt_chars: int | None = _DEFAULT_RANKING_PROMPT_MAX_CHARS,
     degradation: list[str] | None = None,
-    max_tokens: int | None = 2048,
+    max_tokens: int | None = _DEFAULT_LLM_MAX_TOKENS,
 ) -> LLMRankingResult:
     """Use LLM to re-rank candidates and return global research metadata."""
     if not candidates:
@@ -527,7 +534,7 @@ def _call_llm(
     channels: list[dict[str, object]] | None = None,
     config_path: str = "",
     timeout_sec: float = 60.0,
-    max_tokens: int | None = 2048,
+    max_tokens: int | None = _DEFAULT_LLM_MAX_TOKENS,
 ) -> str:
     """Call LLM via litellm with fallback models and channel configs."""
     import litellm
@@ -837,18 +844,24 @@ def _try_parse_json_lenient(raw: str, errors: list[str]):
 
 
 def _looks_like_truncated_json(response: str) -> bool:
-    """True when the text starts as JSON but ends mid-structure.
+    """True when the text opens a JSON structure but ends mid-structure.
 
     A response cut off by ``max_tokens`` is not "no JSON": it is well-formed
     JSON with the tail missing, and the remedy is a larger output budget rather
     than a prompt change. Counting brackets outside string literals tells the
     two apart, so the log says which one happened.
+
+    The structure need not start the response: models routinely prefix it with
+    prose or a bare code fence ("好的，结果如下：```json"). Scan from the first
+    ``{``/``[`` anywhere in the text instead of demanding the response begin
+    with one, so those truncations are still reported as truncation. Prose that
+    opens no structure at all stays ``no_json_found``.
     """
     text = (response or "").strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].strip() if "\n" in text else ""
-    if not text or text[0] not in "{[":
+    starts = [index for index in (text.find("{"), text.find("[")) if index != -1]
+    if not starts:
         return False
+    text = text[min(starts):]
     depth = 0
     in_string = False
     escaped = False
@@ -950,6 +963,66 @@ def _balanced_json_values(text: str) -> list[str]:
     return values
 
 
+def _salvage_ranking_objects(response: str, errors: list[str]) -> list[dict]:
+    """Pull every complete candidate object out of a possibly-truncated response.
+
+    A response cut off by ``max_tokens`` keeps its earlier candidate objects
+    intact and only loses the tail, so the ranking is recoverable in part rather
+    than not at all. Scans brace-by-brace and skips string literals, because the
+    candidate schema is full of free text that may itself contain braces.
+
+    Only the innermost candidates are returned. An object that encloses another
+    recovered candidate is the response *wrapper* (``{"code": ..., "ranked":
+    [...]}``), not a second pick: returning both put the wrapper's own code ahead
+    of the picks nested inside it and left the duplicate for the caller to drop
+    as ``duplicate_code`` / ``unknown_code``.
+    """
+    text = response or ""
+    spans: list[tuple[int, int, dict]] = []
+    stack: list[int] = []
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            stack.append(index)
+        elif char == "}" and stack:
+            # Every balanced pair is a candidate, not just the outermost one:
+            # the useful objects are nested inside the "ranked" array, and the
+            # enclosing object never closes when the response is truncated.
+            open_index = stack.pop()
+            chunk = text[open_index:index + 1]
+            try:
+                parsed = json.loads(chunk)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and "code" in parsed:
+                spans.append((open_index, index, parsed))
+    objects = [
+        parsed
+        for open_index, close_index, parsed in spans
+        if not any(
+            inner_open > open_index and inner_close <= close_index
+            for inner_open, inner_close, _ in spans
+        )
+    ]
+    # The label must describe what actually happened: this scanner also runs over
+    # complete-but-unrecognised shapes, and a complete payload is not a
+    # truncation (the caller labels those "json_repaired:partial_array").
+    if objects and _looks_like_truncated_json(text):
+        errors.append("json_repaired:salvaged_truncated")
+    return objects
+
+
 def _extract_partial_ranking_array(response: str, errors: list[str]):
     """Recover a ranked list from multiple JSON objects in a noisy response."""
     items = []
@@ -959,8 +1032,12 @@ def _extract_partial_ranking_array(response: str, errors: list[str]):
         if isinstance(parsed, dict) and "code" in parsed:
             items.append(parsed)
     if not items:
+        # Nothing balanced survived: the response was truncated mid-structure.
+        items = _salvage_ranking_objects(response, errors)
+    if not items:
         return None
-    errors.append("json_repaired:partial_array")
+    if "json_repaired:salvaged_truncated" not in errors:
+        errors.append("json_repaired:partial_array")
     return {"ranked": items}
 
 
@@ -973,7 +1050,7 @@ def _call_litellm_router(
     temperature: float,
     json_mode: bool,
     timeout_sec: float,
-    max_tokens: int | None = 2048,
+    max_tokens: int | None = _DEFAULT_LLM_MAX_TOKENS,
 ) -> str | None:
     try:
         import yaml

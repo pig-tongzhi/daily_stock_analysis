@@ -897,6 +897,13 @@ class Config:
 
     # === Built-in stock screening ===
     screening_enabled: bool = False
+    # Local intelligence pool (intelligence_items) injection into the screening
+    # L2 LLM context. Off by default: screening must keep working with no pool.
+    screening_intelligence_context_enabled: bool = False
+    screening_intelligence_context_max_items: int = 6
+    screening_intelligence_context_max_chars: int = 800
+    screening_intelligence_context_days: int = 7
+    screening_intelligence_context_candidate_limit: int = 3
 
     # === AI 分析配置 ===
     generation_backend: str = LITELLM_BACKEND_ID
@@ -2304,6 +2311,20 @@ class Config:
             ),
             portfolio_fx_update_enabled=os.getenv('PORTFOLIO_FX_UPDATE_ENABLED', 'true').lower() == 'true',
             screening_enabled=parse_env_bool(os.getenv('SCREENING_ENABLED'), default=False),
+            screening_intelligence_context_enabled=parse_env_bool(
+                os.getenv('SCREENING_INTELLIGENCE_CONTEXT_ENABLED'), default=False),
+            screening_intelligence_context_max_items=parse_env_int(
+                os.getenv('SCREENING_INTELLIGENCE_CONTEXT_MAX_ITEMS'), 6,
+                field_name='SCREENING_INTELLIGENCE_CONTEXT_MAX_ITEMS', minimum=1),
+            screening_intelligence_context_max_chars=parse_env_int(
+                os.getenv('SCREENING_INTELLIGENCE_CONTEXT_MAX_CHARS'), 800,
+                field_name='SCREENING_INTELLIGENCE_CONTEXT_MAX_CHARS', minimum=80, maximum=4000),
+            screening_intelligence_context_days=parse_env_int(
+                os.getenv('SCREENING_INTELLIGENCE_CONTEXT_DAYS'), 7,
+                field_name='SCREENING_INTELLIGENCE_CONTEXT_DAYS', minimum=1),
+            screening_intelligence_context_candidate_limit=parse_env_int(
+                os.getenv('SCREENING_INTELLIGENCE_CONTEXT_CANDIDATE_LIMIT'), 3,
+                field_name='SCREENING_INTELLIGENCE_CONTEXT_CANDIDATE_LIMIT', minimum=1),
         )
     
     @classmethod

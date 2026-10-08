@@ -312,12 +312,19 @@ def _spawn_refresh_locked() -> concurrent.futures.Future:
     return fut
 
 
-def _get_akshare_name_to_code() -> Optional[Dict[str, str]]:
+def _get_akshare_name_to_code(
+    *, allow_fetch: bool = True
+) -> Optional[Dict[str, str]]:
     """获取 AkShare name->code：新鲜缓存直读；过期走 stale-while-revalidate
     （立即返回旧值 + 后台刷新）；冷启动限时等待在途 Future；失败退避。
 
-    请求路径最坏只阻塞冷启动等待（_AKSHARE_WAIT_COLD_START）；TTL 过期
-    的请求零等待；网络 IO 全部在后台刷新线程。
+    ``allow_fetch=False`` 为只读模式：只用已在内存/磁盘的缓存（新鲜或
+    stale），既不发起后台拉取，也不等待在途 Future；冷启动直接返回 None。
+    热路径（聊天首轮的名称匹配）依赖它保证零阻塞。
+
+    ``allow_fetch=True``（默认）请求路径最坏只阻塞冷启动等待
+    （_AKSHARE_WAIT_COLD_START）；TTL 过期的请求零等待；网络 IO 全部在
+    后台刷新线程。
     """
     with _state_lock:
         if _akshare_cache is None:
@@ -326,6 +333,10 @@ def _get_akshare_name_to_code() -> Optional[Dict[str, str]]:
         if _akshare_cache is not None and (now - _akshare_cache[0]) < _AKSHARE_CACHE_TTL:
             return _akshare_cache[1]
         stale_map = _akshare_cache[1] if _akshare_cache is not None else None
+        if not allow_fetch:
+            # 只读：有 stale 就服务 stale，没有就交给调用方的本地库兜底。
+            # 不 spawn、不 join，冷启动也不写入失败退避（那是拉取路径的事）。
+            return stale_map
         in_backoff = (
             _akshare_failure_cache is not None
             and (now - _akshare_failure_cache) < _AKSHARE_FAILURE_TTL
@@ -357,24 +368,31 @@ def _get_akshare_name_to_code() -> Optional[Dict[str, str]]:
     return result
 
 
-def local_name_to_code_map() -> Dict[str, str]:
+def local_name_to_code_map(*, wait_for_fetch: bool = False) -> Dict[str, str]:
     """Return a name->code map built only from locally available data.
 
-    Combines the small built-in reverse table with the disk-cached online map.
-    The online map is served stale-while-revalidate (see
-    ``_get_akshare_name_to_code``), so this never waits on a fetch: with a warm
-    cache it is a dict merge, and with a cold cache it returns just the built-in
-    table rather than blocking. Callers that match names inside free text use
-    this instead of ``resolve_name_to_code`` per candidate, because the latter
-    falls through to difflib fuzzy matching, which is far too slow to run over
-    every substring of a message.
+    Combines the small built-in reverse table with the AkShare name map already
+    in memory or on disk. By default this is non-blocking: it serves the cached
+    map (fresh or stale) and, on a cold cache, returns just the built-in table.
+    It never spawns a fetch and never waits on one, so it is safe on the request
+    path — ``resolve_stock_scope`` runs synchronously on every chat turn, and a
+    cold-start wait there would stall the first message.
+
+    Pass ``wait_for_fetch=True`` only where a cold-start block is acceptable:
+    that restores ``_get_akshare_name_to_code``'s fetch-and-wait behaviour,
+    which can block for up to ``_AKSHARE_WAIT_COLD_START`` seconds.
+
+    Callers that match names inside free text use this instead of
+    ``resolve_name_to_code`` per candidate, because the latter falls through to
+    difflib fuzzy matching, which is far too slow to run over every substring of
+    a message.
 
     Keys are normalized via ``_normalize_stock_name``; normalize lookups the
     same way.
     """
     merged: Dict[str, str] = dict(_LOCAL_REVERSE_MAP)
     try:
-        online = _get_akshare_name_to_code()
+        online = _get_akshare_name_to_code(allow_fetch=wait_for_fetch)
     except Exception as exc:  # never fatal: the built-in table still serves
         logger.debug(f"[NameResolver] 本地索引跳过 AkShare 缓存: {exc}")
         online = None

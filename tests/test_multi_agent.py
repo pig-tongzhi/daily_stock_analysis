@@ -14,6 +14,8 @@ Covers:
 import json
 import sys
 import os
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -225,14 +227,62 @@ class TestExtractStockCode(unittest.TestCase):
 # Stock scope resolution
 # ============================================================
 
+# Deterministic stand-in for the machine-local name index. 京东方A / 万科A /
+# 值得买 exist only in data/cache/akshare_name_map.json (gitignored), while
+# 步步高 / 好想你 / 三人行 / 大智慧 are companies whose names are also ordinary
+# Chinese prose. Keys are already normalized (NFKC + no whitespace).
+_HERMETIC_STOCK_NAME_INDEX = {
+    "京东方A": "000725",
+    "京东": "JD",
+    "值得买": "300785",
+    "宁德时代": "300750",
+    "比亚迪": "002594",
+    "万科A": "000002",
+    "步步高": "002251",
+    "好想你": "002582",
+    "三人行": "605168",
+    "大智慧": "601519",
+    "我爱我家": "000560",
+    "完美世界": "002624",
+    "每日互动": "300766",
+    "天地在线": "002995",
+    "家家悦": "603708",
+}
+
+
 class TestStockScopeResolution(unittest.TestCase):
-    """Validate chat stock-scope state transitions."""
+    """Validate chat stock-scope state transitions.
+
+    The real name index is built from ``data/cache/akshare_name_map.json``,
+    which is gitignored, so a fresh clone only has the ~82-entry built-in table
+    and these tests would change meaning with the machine they run on. Patch the
+    index with an explicit table instead: keys are normalized the way the real
+    index is (NFKC + all whitespace stripped), because ``_name_matches_in_run``
+    normalizes each window before lookup. See
+    ``test_hermetic_name_index_keys_are_normalized`` which pins that.
+    """
+
+    def setUp(self):
+        patcher = patch(
+            "src.agent.stock_scope._stock_name_index",
+            return_value=dict(_HERMETIC_STOCK_NAME_INDEX),
+        )
+        self.addCleanup(patcher.stop)
+        patcher.start()
 
     # Chinese users normally type the company name rather than the code. Before
     # names were matched, those turns produced no candidates at all, so the
     # session stayed pinned to the stock already in context and every tool call
     # for the requested stock came back as stock_scope_violation
     # (retriable=False) — the request looked blocked rather than misrouted.
+
+    def test_hermetic_name_index_keys_are_normalized(self):
+        """The patched index must be shaped like the real one, or lookups that
+        do normalize their window would silently never match."""
+        from src.services.name_to_code_resolver import normalize_stock_name
+
+        for name in _HERMETIC_STOCK_NAME_INDEX:
+            self.assertEqual(normalize_stock_name(name), name)
 
     def test_chinese_stock_name_switches_scope(self):
         result = resolve_stock_scope(
@@ -276,6 +326,126 @@ class TestStockScopeResolution(unittest.TestCase):
         "worth buying"; only the former should resolve."""
         self.assertNotIn("300785", extract_stock_mentions("AAPL 和 TSLA 哪个更值得买"))
         self.assertIn("300785", extract_stock_mentions("看看值得买"))
+
+    def test_ordinary_prose_never_switches_scope(self):
+        """Company names are also everyday phrases. A match that is not an
+        explicit request ("<verb><name>" ending the clause) must leave the
+        session pinned instead of silently re-pinning it to an unrelated stock.
+
+        步步高升 only matches because 步步高 (002251) is a listed company; the
+        other messages contain a full company name used as plain prose."""
+        cases = [
+            "帮我看看步步高升的概率",
+            "祝你步步高升",
+            "好想你",
+            "三人行，必有我师",
+            "这个人很有大智慧",
+            "我爱我家",
+            "完美世界",
+            "每日互动",
+            "天地在线",
+            "家家悦",
+        ]
+
+        for message in cases:
+            with self.subTest(message=message):
+                result = resolve_stock_scope(
+                    message,
+                    {"stock_code": "000063", "stock_name": "中兴通讯"},
+                )
+
+                self.assertEqual(result.stock_scope.mode, "maintain")
+                self.assertEqual(result.stock_scope.expected_stock_code, "000063")
+                self.assertEqual(result.stock_scope.allowed_stock_codes, {"000063"})
+                self.assertEqual(result.effective_context["stock_code"], "000063")
+
+    def test_ordinary_prose_does_not_create_a_scope_on_the_first_turn(self):
+        """With strict_initial_scope an uncorroborated name must not fabricate a
+        lock for the very first message."""
+        for message in ("帮我看看步步高升的概率", "好想你", "三人行，必有我师"):
+            with self.subTest(message=message):
+                result = resolve_stock_scope(message, None, strict_initial_scope=True)
+
+                self.assertIsNone(result.stock_scope)
+
+    def test_explicit_name_request_still_switches_when_uncorroborated_names_do_not(self):
+        """The corroboration rule must not weaken the cases the feature exists
+        for. 分析万科A / 看看值得买 are explicit requests; the verb sits directly
+        before a name that ends the clause."""
+        for message, expected in (
+            ("看看宁德时代", "300750"),
+            ("换成宁德时代", "300750"),
+            ("看看 宁德时代", "300750"),
+            ("分析一下宁德时代", "300750"),
+            ("看看这只比亚迪", "002594"),
+            ("分析万科A", "000002"),
+            ("看看值得买", "300785"),
+        ):
+            with self.subTest(message=message):
+                result = resolve_stock_scope(
+                    message,
+                    {"stock_code": "000063", "stock_name": "中兴通讯"},
+                )
+
+                self.assertEqual(result.stock_scope.mode, "switch")
+                self.assertEqual(result.stock_scope.expected_stock_code, expected)
+                self.assertEqual(result.stock_scope.allowed_stock_codes, {expected})
+
+    def test_name_followed_by_attribute_tail_switches_scope(self):
+        """Chinese normally continues after the name with the attribute the user
+        asks about. Requiring the name to end its CJK run killed most real
+        requests: every tool call for the named stock came back as
+        stock_scope_violation(retriable=False), which is the failure the name
+        matching exists to prevent."""
+        for message in (
+            "看看宁德时代的走势",
+            "分析宁德时代的基本面",
+            "分析一下宁德时代基本面",
+            "看看宁德时代怎么样",
+            "看看宁德时代能买吗",
+            "帮我看看宁德时代行不行",
+            "分析宁德时代的三季报",
+            "看看宁德时代估值",
+            "诊断一下宁德时代的问题",
+            "看看这只宁德时代股票",
+            "看看宁德时代现在多少钱",
+            "改看宁德时代的K线",
+        ):
+            with self.subTest(message=message):
+                result = resolve_stock_scope(
+                    message,
+                    {"stock_code": "000063", "stock_name": "中兴通讯"},
+                )
+
+                self.assertEqual(result.stock_scope.mode, "switch")
+                self.assertEqual(result.stock_scope.expected_stock_code, "300750")
+                self.assertEqual(result.stock_scope.allowed_stock_codes, {"300750"})
+                self.assertEqual(result.effective_context["stock_code"], "300750")
+
+    def test_attribute_tail_relaxation_stays_strict_on_the_first_turn(self):
+        """The mid-session relaxation must not leak into strict_initial_scope: a
+        first message has no current stock to fall back on, so 步步高升's verb
+        match alone must not fabricate a lock."""
+        for message in (
+            "帮我看看步步高升的概率",
+            "祝你步步高升",
+            "好想你",
+            "三人行，必有我师",
+            "这个人很有大智慧",
+        ):
+            with self.subTest(message=message):
+                result = resolve_stock_scope(message, None, strict_initial_scope=True)
+                self.assertIsNone(result.stock_scope)
+
+        for message, expected in (
+            ("看看宁德时代", "300750"),
+            ("换成宁德时代", "300750"),
+            ("分析万科A", "000002"),
+            ("看看值得买", "300785"),
+        ):
+            with self.subTest(message=message):
+                result = resolve_stock_scope(message, None, strict_initial_scope=True)
+                self.assertEqual(result.stock_scope.expected_stock_code, expected)
 
     def test_sector_only_message_keeps_current_stock(self):
         """Naming a sector is not naming a stock, so the scope is unchanged —
@@ -526,6 +696,52 @@ class TestStockScopeResolution(unittest.TestCase):
         self.assertEqual(result.stock_scope.mode, "compare")
         self.assertEqual(result.effective_context["stock_code"], "600519")
         self.assertEqual(result.stock_scope.allowed_stock_codes, {"600519", "TSLA"})
+
+
+class TestStockNameIndexSingleFlight(unittest.TestCase):
+    """Concurrent cold turns must build the name index once, not once each.
+
+    ``_stock_name_index`` releases its cache lock while building, so without
+    single-flight every thread that arrives on a cold cache runs the whole
+    (potentially network-backed) build itself.
+    """
+
+    def test_concurrent_cold_callers_share_one_build(self):
+        import src.agent.stock_scope as stock_scope
+
+        calls = []
+        barrier = threading.Barrier(4)
+        results = []
+
+        def slow_build():
+            calls.append(1)
+            time.sleep(0.2)
+            return {"宁德时代": "300750"}
+
+        builder = patch(
+            "src.services.name_to_code_resolver.local_name_to_code_map", slow_build
+        )
+        builder.start()
+        self.addCleanup(builder.stop)
+        cache = patch.object(stock_scope, "_name_index_cache", None)
+        cache.start()
+        self.addCleanup(cache.stop)
+
+        def worker():
+            barrier.wait(timeout=5)
+            results.append(stock_scope._stock_name_index())
+
+        threads = [threading.Thread(target=worker, daemon=True) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(len(calls), 1, "index must be built exactly once")
+        self.assertEqual(len(results), 4)
+        for result in results:
+            self.assertEqual(result, {"宁德时代": "300750"})
 
 
 # ============================================================
