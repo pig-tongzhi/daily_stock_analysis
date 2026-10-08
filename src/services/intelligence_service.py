@@ -182,7 +182,27 @@ class IntelligenceService:
             raise IntelligenceServiceError(f"Intelligence source template not found: {template_id}")
         payload = {key: value for key, value in selected.items() if key != "template_id"}
         payload.update({key: value for key, value in (overrides or {}).items() if value is not None})
-        return self.create_source(payload)
+        # 名字已存在时不再报 "name already exists"：模板创建同时是"重新启用"入口。
+        # 自动拉取如今会长期停用被有意关闭/上游失效的内置源，若这里只报 400，用户就
+        # 没有任何受支持的恢复方式（没有 PATCH/PUT，界面只读）。对已存在的源只应用
+        # enabled 这一个覆盖项：其余覆盖项（name/description/url/market/source_type…）
+        # 会被静默忽略，以免用模板默认值覆盖用户手改过的配置；需要改别的字段只能先
+        # 删除再重建。
+        fields = self._normalize_source_fields(payload)
+        self._validate_url(fields["url"])
+        existing = self.repo.get_source_by_name(fields["name"])
+        if existing is not None:
+            if bool(existing.enabled) != bool(fields["enabled"]):
+                self.repo.update_source_enabled(existing.id, bool(fields["enabled"]))
+                logger.info(
+                    "Intelligence template create updated existing source id=%s name=%s enabled=%s",
+                    existing.id,
+                    fields["name"],
+                    fields["enabled"],
+                )
+            refreshed = self.repo.get_source_by_name(fields["name"]) or existing
+            return self._source_to_dict(refreshed)
+        return self.create_source(fields)
 
     def create_default_sources(self, overrides: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         request_fields = dict(overrides or {})
@@ -204,15 +224,18 @@ class IntelligenceService:
     def ensure_default_sources_enabled(self) -> Dict[str, Any]:
         """Create missing built-in sources and enable built-ins the user has not acted on.
 
-        For an existing built-in that is currently disabled, `last_fetched_at`
-        tells the two cases apart:
+        For an existing built-in that is currently disabled, only a source that
+        has never even been *attempted* is an untouched default:
 
-        * **never fetched** — an untouched default; enable it, so "auto mode"
+        * **never attempted** (`last_status is None`) — enable it, so "auto mode"
           keeps meaning "use the built-in set" (a fresh install still works).
-        * **already fetched at least once** — it ran and was then switched off on
-          purpose (too noisy, wrong market, broken upstream, ...); leave it
-          disabled. Otherwise auto mode would resurrect it on every run and keep
-          paying its fetch cost, and the user could never switch it off.
+        * **attempted at least once** — success (writes `last_fetched_at`) or
+          failure (writes `last_status="failed"`, and nothing ever clears it) both
+          mean the source ran; it was then switched off on purpose (too noisy,
+          wrong market, broken upstream, ...). Leave it disabled. Using only
+          `last_fetched_at` would mistake a permanently failing upstream (e.g.
+          SEC/HKEX on an A-share-only network) for an untouched default and
+          re-enable it on every run, resurrecting it forever.
         """
         created_count = 0
         enabled_count = 0
@@ -223,15 +246,19 @@ class IntelligenceService:
             try:
                 existing = self.repo.get_source_by_name(name)
                 if existing is not None:
-                    if not existing.enabled and existing.last_fetched_at is None:
+                    if (
+                        not existing.enabled
+                        and existing.last_fetched_at is None
+                        and existing.last_status is None
+                    ):
                         self.repo.update_source_enabled(existing.id, True)
                         enabled_count += 1
                         # 这是自动拉取主动改动了源的启用状态（不是用户操作），
                         # 逐源打 WARNING 并带上 id/名称，便于排查"某个源为什么自己开了"。
                         logger.warning(
                             "Intelligence auto fetch enabled built-in source id=%s name=%s "
-                            "(never fetched before; it will stay enabled until fetched once, "
-                            "after which disabling it is respected)",
+                            "(never attempted before; it will stay enabled until the first "
+                            "fetch attempt, after which disabling it is respected)",
                             existing.id,
                             name,
                         )

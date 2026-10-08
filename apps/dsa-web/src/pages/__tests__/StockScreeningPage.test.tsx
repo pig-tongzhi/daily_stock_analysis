@@ -1791,7 +1791,10 @@ describe('StockScreeningPage', () => {
           name: '贵州茅台',
           score: 91.2,
           reason: 'Screening pick',
-          dsaAnalysisSummary: 'rjharness行情：现价 1688，涨跌幅 1.2%；rjharness新闻：贵州茅台最新公告',
+          // The backend still emits the upstream "DSA…" prefixes (see
+          // src/services/screening/dsa_provider.py), so the fixture must use the real
+          // string rather than the rebranded one the UI never receives.
+          dsaAnalysisSummary: 'DSA行情：现价 1688，涨跌幅 1.2%；DSA新闻：贵州茅台最新公告',
           dsaNews: [{ title: '贵州茅台最新公告', source: '测试源' }],
           dsaContext: {
             enriched: true,
@@ -1821,6 +1824,81 @@ describe('StockScreeningPage', () => {
     expect(screen.getByText('贵州茅台最新公告')).toBeInTheDocument();
     expect(screen.getByText('数据补充提示')).toBeInTheDocument();
     expect(screen.getByText('stock_news_unavailable')).toBeInTheDocument();
+  });
+
+  it('normalises the DSA事件： enrichment prefix emitted by screening_service', async () => {
+    getScreeningStatus.mockResolvedValueOnce({
+      enabled: true,
+      available: true,
+    });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true,
+      candidates: [
+        {
+          rank: 1,
+          code: '600519',
+          name: '贵州茅台',
+          score: 91.2,
+          reason: 'Screening pick',
+          // src/services/screening_service.py:3692 appends "DSA事件：…" (fullwidth colon)
+          // to the same summary string as the 行情/新闻 parts.
+          dsaAnalysisSummary:
+            'DSA行情：现价 1688，涨跌幅 1.2%；DSA新闻：贵州茅台最新公告；DSA事件：公司发布回购公告',
+          raw: {},
+        },
+      ],
+      candidateCount: 1,
+    });
+
+    render(<StockScreeningPage />);
+
+    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
+
+    expect(await screen.findByText(/事件：公司发布回购公告/)).toBeInTheDocument();
+    expect(screen.getByText(/行情：现价 1688/)).toBeInTheDocument();
+    expect(screen.getByText(/新闻：贵州茅台最新公告/)).toBeInTheDocument();
+    expect(screen.queryByText(/DSA事件/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/DSA新闻/)).not.toBeInTheDocument();
+  });
+
+  it('hides the DSA provider context note and localises the deep analysis failure', async () => {
+    getScreeningStatus.mockResolvedValueOnce({
+      enabled: true,
+      available: true,
+    });
+    screenStocks.mockResolvedValueOnce({
+      enabled: true,
+      candidates: [
+        {
+          rank: 1,
+          code: '600519',
+          name: '贵州茅台',
+          score: 91.2,
+          reason: 'Screening pick',
+          raw: {},
+        },
+      ],
+      candidateCount: 1,
+      llmRanked: true,
+      warnings: [
+        // src/services/screening/dsa_provider.py:62 — pure bookkeeping, the UI
+        // already shows the enriched count elsewhere.
+        'DSA provider context applied 2 of 3 candidates',
+        // src/services/screening/dsa.py:88 — user-visible degradation.
+        'DSA deep analysis failed for 600519: timeout',
+      ],
+    });
+
+    render(<StockScreeningPage />);
+
+    expect(await screen.findByText('选股已开启')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /运行选股/ }));
+
+    expect(await screen.findByText('选股提示')).toBeInTheDocument();
+    expect(screen.getByText('部分候选的深度分析未完成。')).toBeInTheDocument();
+    expect(screen.queryByText(/provider context applied/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/deep analysis failed/)).not.toBeInTheDocument();
   });
   it('keeps the shared loading held when a stale auto-restore finishes while a manual history request is in flight', async () => {
     // 回归 OR-COR-9b1f8c4e：过期的自动恢复请求不得在 finally 中无条件清掉共享 loading，

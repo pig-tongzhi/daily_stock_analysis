@@ -424,7 +424,8 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertEqual(sources["total"], result["fetch"]["source_count"])
         self.assertEqual(self.service.list_items()["total"], result["saved_count"])
 
-    def test_refresh_auto_sources_enables_existing_default_sources(self) -> None:
+    def test_refresh_auto_sources_enables_never_fetched_default_sources(self) -> None:
+        """从未被*尝试*过的内置源（last_status/last_fetched_at 均为空）仍会被自动启用。"""
         self.service.config.news_intel_auto_fetch_enabled = True
         created = self.service.create_default_sources()
         self.assertGreaterEqual(created["created_count"], 8)
@@ -469,6 +470,40 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertFalse(self.service.repo.get_source_by_name("SEC Latest Filings").enabled)
         self.assertEqual(created["created_count"], created["total"])
 
+    def test_failed_upstream_source_stays_disabled_after_disable(self) -> None:
+        """抓取*失败*（last_status='failed'、last_fetched_at 仍为空）过的内置源被关掉后必须保持关闭。
+
+        回归：仅用 `last_fetched_at is None` 判断"从未被用户碰过"会把永久失败的上游
+        （典型：A 股网络下抓不到 SEC/HKEX）当成全新默认源，在一个又一个冷却周期里
+        反复重新启用并重新打印 WARNING。
+        """
+        self.service.config.news_intel_auto_fetch_enabled = True
+        created = self.service.create_default_sources()
+        self.assertGreaterEqual(created["created_count"], 8)
+
+        def failing_get(url, **_kwargs):
+            return self._mock_http_error_response(url)
+
+        # 第一轮：所有内置源首次抓取即失败（没有一次成功）
+        with patch("src.services.intelligence_service.requests.get", side_effect=failing_get):
+            self.service.refresh_auto_sources(force=True)
+
+        target = self.service.repo.get_source_by_name("SEC Latest Filings")
+        self.assertIsNotNone(target)
+        self.assertIsNone(target.last_fetched_at)
+        self.assertEqual(target.last_status, "failed")
+        self.service.repo.update_source_enabled(target.id, False)
+
+        # 第二轮：失败过的源已被用户关闭，自动刷新不得把它重新打开
+        IntelligenceService.reset_auto_fetch_state()
+        with patch("src.services.intelligence_service.requests.get", side_effect=failing_get):
+            result = self.service.refresh_auto_sources(force=True)
+
+        self.assertEqual(result["bootstrap"]["enabled_count"], 0)
+        refreshed = self.service.repo.get_source_by_name("SEC Latest Filings")
+        self.assertFalse(refreshed.enabled)
+        self.assertIsNone(refreshed.last_fetched_at)
+
     def test_refresh_auto_sources_uses_cooldown_after_success(self) -> None:
         self.service.config.news_intel_auto_fetch_enabled = True
 
@@ -510,6 +545,54 @@ class IntelligenceServiceTestCase(unittest.TestCase):
         self.assertFalse(second.get("skipped"))
         self.assertNotEqual(second.get("reason"), "cooldown")
         self.assertTrue(mock_get.called)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    @patch.object(Config, "_parse_stock_email_groups", return_value=[])
+    def test_auto_fetch_cooldown_env_defaults_and_clamps(
+        self, _mock_stock_email_groups, _mock_parse_litellm_yaml, _mock_setup_env
+    ) -> None:
+        """NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS：默认 1200，clamp 到 60..86400。"""
+        cases = [
+            (None, 1200),       # 未设置 -> 默认 1200
+            ("", 1200),         # 空白 -> 默认 1200
+            ("   ", 1200),
+            ("0", 60),          # 低于下限 -> 60
+            ("-5", 60),
+            ("90", 90),
+            ("86400", 86400),   # 上限本身保留
+            ("999999", 86400),  # 高于上限 -> 86400
+        ]
+        for raw, expected in cases:
+            env = {} if raw is None else {"NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS": raw}
+            with patch.dict(os.environ, env, clear=True):
+                configured = Config._load_from_env()
+            self.assertEqual(
+                configured.news_intel_auto_fetch_min_interval_seconds,
+                expected,
+                f"NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS={raw!r}",
+            )
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    @patch.object(Config, "_parse_stock_email_groups", return_value=[])
+    def test_auto_fetch_cooldown_env_non_numeric_falls_back_with_warning(
+        self, _mock_stock_email_groups, _mock_parse_litellm_yaml, _mock_setup_env
+    ) -> None:
+        with patch.dict(
+            os.environ, {"NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS": "soon"}, clear=True
+        ):
+            with self.assertLogs("src.config", level="WARNING") as captured:
+                configured = Config._load_from_env()
+
+        self.assertEqual(configured.news_intel_auto_fetch_min_interval_seconds, 1200)
+        self.assertTrue(
+            any(
+                "NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS" in line
+                for line in captured.output
+            ),
+            captured.output,
+        )
 
     def test_refresh_auto_sources_waits_for_in_flight_fetch_before_reading_items(self) -> None:
         self.service.config.news_intel_auto_fetch_enabled = True

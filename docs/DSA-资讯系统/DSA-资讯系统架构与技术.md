@@ -317,8 +317,9 @@ def refresh_auto_sources(self, *, force=False):
     # 闸门② 进程内串行（并发保护）
     while cls._auto_fetch_in_progress: wait()
 
-    # 闸门③ 60 分钟冷却
-    if not force and (now - last_run_at) < 3600:
+    # 闸门③ 冷却（NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS，默认 1200 秒，clamp 60~86400）
+    cooldown_seconds = config.news_intel_auto_fetch_min_interval_seconds or 1200
+    if not force and (now - last_run_at) < cooldown_seconds:
         return {"skipped": True, "reason": "cooldown"}
 
     # 执行
@@ -334,10 +335,10 @@ def refresh_auto_sources(self, *, force=False):
 | 上游内容更新 | jin10 ≈11 分钟 / 热榜类 4~10 小时 | 实测 pubDate |
 | RSSHub 缓存 | **5 分钟** | 实测 `cache-control: max-age=300` |
 | NewsNow 缓存 | **10~30 分钟** | 源码 `TTL=30min`、`Interval=10min`（源分档 2/5/30 分钟）|
-| DSA 拉取冷却 | **60 分钟** | 源码 `_AUTO_FETCH_MIN_INTERVAL_SECONDS = 3600` |
+| DSA 拉取冷却 | **20 分钟**（`60` ~ `86400` 秒可配）| 源码 `news_intel_auto_fetch_min_interval_seconds`（默认 `1200`）/ 环境变量 `NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS` |
 | **分析触发频率** | **每天 1 次**（默认 18:00）| `SCHEDULE_TIME` |
 
-**结论**：默认用法下，**DSA 每天同步 1 次**。60 分钟冷却只防"同一小时内重复分析"。
+**结论**：默认用法下，**DSA 每天同步 1 次**。20 分钟冷却只防"同一冷却窗口内重复分析"。
 
 ### 5.2 注入 Prompt 的机制
 
@@ -522,15 +523,14 @@ return (not ip.is_global      # ← 最严格：必须"全局可路由"
 | O4 | **NewsNow `sv` 版本号陈旧** | `7.7.5` vs RSSHub `8.7.9` | 上游改版后可能被拒 |
 | O5 | **NewsNow 只绑 IPv6** | 实测只监听 `[::1]:5173` | DSA 用 `127.0.0.1` 会连不上，必须 `localhost` |
 | O6 | **`summary` 字段差异未利用** | RSSHub 有 3000 字正文，NewsNow 无 | 未接通前无法评估对报告质量的实际影响 |
-| O7 | **60 分钟冷却是硬编码常量** | `_AUTO_FETCH_MIN_INTERVAL_SECONDS = 60*60` | 无环境变量可调，要改代码 |
-| O8 | **RSSHub 缓存无法按源粒度配置** | `CACHE_EXPIRE` 是全局 | 想给不同源设不同 TTL 做不到 |
+| O7 | **RSSHub 缓存无法按源粒度配置** | `CACHE_EXPIRE` 是全局 | 想给不同源设不同 TTL 做不到 |
 
 ### 7.3 待验证项（接通后才能测）
 
 - [ ] `intelligence_items` 落库后的真实字段填充率（`summary` / `published_at` 是否为空）
 - [ ] 报告里「风险警报 / 利好催化 / 最新动态」是否真的用上了资讯
 - [ ] RSSHub 有正文 vs NewsNow 只有标题，对报告质量的**实际**差异
-- [ ] 60 分钟冷却在一次多股分析中的实际表现
+- [ ] 冷却窗口（默认 1200 秒）在一次多股分析中的实际表现
 - [ ] 资讯池能否降低 Bocha 用量（两条链路是否真的互补）
 - [ ] `scope_type: symbol` 的源怎么建（当前内置模板都是 market 级）
 
@@ -778,7 +778,6 @@ scope_type=market  scope_value=__dsa_null_scope__  market=hk       15 条
 | **P1** | 清理不需要的内置源（SEC/HKEX/MarketWatch），它们拖慢拉取且实测失败 | §12.2 |
 | **P1** | 停用无 `published_at` 的源（`cls-hot` / `xueqiu-hotstock`），它们破坏时效过滤 | §13.2 |
 | **P2** | 把 `NO_PROXY` 修复合入启动脚本，避免复发 | §12.1 |
-| **P2** | 60 分钟冷却改成可配置（当前硬编码常量） | §7.2 O7 |
 | **P3** | 评估是否需要 `SCHEDULE_ENABLED=true` 定时 | — |
 
 ## 16. 本次踩坑速查（下次直接照做）

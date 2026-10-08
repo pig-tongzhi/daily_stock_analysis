@@ -47,14 +47,14 @@ NEWSNOW_BASE_URL=https://newsnow.busiyi.world
 
 `NEWS_INTEL_AUTO_FETCH_ENABLED` 默认关闭。设为 `true` 后，**个股分析与大盘复盘**在读取本地资讯池前会先执行一次 fail-open 自动刷新：缺少内置资讯源时自动创建（新建的源为启用状态），然后拉取全部启用源并写入 `intelligence_items`。
 
-对**已存在但处于停用状态**的内置源，自动刷新按 `last_fetched_at` 区分两种情况：
+对**已存在但处于停用状态**的内置源，自动刷新按"是否被尝试过"区分两种情况（`last_status is None` 表示从未尝试；成功写入 `last_fetched_at`，失败写入 `last_status='failed'`，二者都不会被清除）：
 
 | 情况 | 处理 | 理由 |
 | --- | --- | --- |
-| **从未被抓取过** | 启用它 | 属于用户尚未接触过的默认源，保持"自动模式 = 使用内置源集"的语义；全新安装仍开箱可用 |
-| **已被抓取过** | **保持停用** | 该源跑过并被有意关闭（太吵、市场不对、上游失效等）。否则每次自动拉取都会把它复活并继续支付抓取成本，用户永远关不掉它 |
+| **从未被尝试过**（`last_status` 与 `last_fetched_at` 均为空） | 启用它 | 属于用户尚未接触过的默认源，保持"自动模式 = 使用内置源集"的语义；全新安装仍开箱可用 |
+| **已被尝试过**（成功过或失败过） | **保持停用** | 该源跑过并被有意关闭（太吵、市场不对、上游失效等）。只看 `last_fetched_at` 会把永久失败的上游（典型：A 股网络下抓不到 SEC/HKEX）误判成全新默认源，在每个冷却周期反复复活并重新打印 WARNING。 |
 
-需要重新启用一个已被抓取过的内置源时，用 `POST /sources/templates/{template_id}` 重建，或直接改库/界面。
+需要重新启用一个已被尝试过的内置源时，用 `POST /sources/templates/{template_id}`（同名源会被就地重新启用并返回该行，不再报 400），或在数据库/界面中直接改。
 
 **日志**：自动刷新每次创建内置源会打 INFO，每次**启用**一个原本停用的内置源会打 WARNING 并带上 `id` 与名称，例如 `Intelligence auto fetch enabled built-in source id=1 name=SEC Latest Filings (...)`，便于确认某个源的启用状态变化是否来自本机制。
 
@@ -109,7 +109,7 @@ NEWSNOW_BASE_URL=https://newsnow.busiyi.world
 - `POST /sources`：创建资讯源。
 - `GET /sources`：查询资讯源。
 - `GET /sources/templates?market=hk`：查询内置资讯源模板。
-- `POST /sources/templates/{template_id}`：从内置模板创建资讯源，可覆盖名称、启用状态、作用域和说明。
+- `POST /sources/templates/{template_id}`：从内置模板创建资讯源，可覆盖名称、启用状态、作用域和说明。若**同名源已存在**则不再返回 400，而是就地更新其启用状态并返回该行（`POST .../templates/sec-company-news` 即"重新启用 SEC Latest Filings"的受支持方式）；仅当模板不存在（404）或 payload 本身非法（如 URL 不合法、缺少名称，400）时才报错。
 - `POST /sources/defaults`：一键创建全部内置默认源；接口幂等，已存在的同名源会返回 `created=false`，不会重复插入。默认不传 `enabled` 时以 `false` 创建；如需默认启用可传 `{ "enabled": true }`。
 - `POST /sources/test`：测试 payload，不落库。
 - `POST /sources/{source_id}/fetch?dry_run=false`：拉取单个源。

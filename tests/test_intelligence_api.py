@@ -106,6 +106,38 @@ class IntelligenceApiTestCase(unittest.TestCase):
         self.assertEqual(created.json()["name"], "hkex-copy")
         self.assertFalse(created.json()["enabled"])
 
+    def test_template_create_reenables_an_existing_disabled_builtin_source(self) -> None:
+        """关掉的内置源必须能通过模板接口重新启用，同时不放宽非法 payload 的 400 契约。"""
+        from src.services.intelligence_service import IntelligenceService
+
+        created = self.client.post("/api/v1/intelligence/sources/defaults", json={"enabled": True})
+        self.assertEqual(created.status_code, 200)
+        target = next(
+            item["source"] for item in created.json()["items"]
+            if item["source"]["name"] == "SEC Latest Filings"
+        )
+        self.assertTrue(target["enabled"])
+
+        # 模拟用户有意关闭（端点面没有 PATCH/PUT，只能走库层或后续 UI）。
+        IntelligenceService().repo.update_source_enabled(target["id"], False)
+        disabled = self.client.get("/api/v1/intelligence/sources", params={"enabled": True})
+        self.assertFalse(any(item["id"] == target["id"] for item in disabled.json()["items"]))
+
+        # 文档承诺的恢复方式：按模板重建同名源 -> 就地重新启用同一行，而不是 400。
+        reenabled = self.client.post("/api/v1/intelligence/sources/templates/sec-company-news")
+        self.assertEqual(reenabled.status_code, 200)
+        self.assertEqual(reenabled.json()["id"], target["id"])
+        self.assertTrue(reenabled.json()["enabled"])
+        enabled_again = self.client.get("/api/v1/intelligence/sources", params={"enabled": True})
+        self.assertTrue(any(item["id"] == target["id"] for item in enabled_again.json()["items"]))
+
+        # 非法 payload 仍然是 400：错误契约只对"同名已存在"放宽。
+        invalid = self.client.post(
+            "/api/v1/intelligence/sources/templates/hkex-news",
+            json={"scope_type": "symbol"},
+        )
+        self.assertEqual(invalid.status_code, 400)
+
     def test_create_builtin_default_sources_is_idempotent(self) -> None:
         first = self.client.post("/api/v1/intelligence/sources/defaults", json={"enabled": False})
         second = self.client.post("/api/v1/intelligence/sources/defaults", json={"enabled": False})

@@ -99,14 +99,23 @@ export const ScoreGauge: React.FC<ScoreGaugeProps> = ({
   // Glow is disabled in the monochrome theme.
   const sentimentConfig = {
     greed: {
-      color: 'var(--gauge-greed)',             glowFilter: 'transparent',
-      lightColor: 'var(--gauge-greed)',        lightEndColor: 'var(--gauge-greed-end)',     },
+      color: 'var(--gauge-greed)',
+      glowFilter: 'transparent',
+      lightColor: 'var(--gauge-greed)',
+      lightEndColor: 'var(--gauge-greed-end)',
+    },
     neutral: {
-      color: 'var(--gauge-neutral)',             glowFilter: 'transparent',
-      lightColor: 'var(--gauge-neutral)',        lightEndColor: 'var(--gauge-neutral-end)',     },
+      color: 'var(--gauge-neutral)',
+      glowFilter: 'transparent',
+      lightColor: 'var(--gauge-neutral)',
+      lightEndColor: 'var(--gauge-neutral-end)',
+    },
     fear: {
-      color: 'var(--gauge-fear)',             glowFilter: 'transparent',
-      lightColor: 'var(--gauge-fear)',        lightEndColor: 'var(--gauge-fear-end)',     },
+      color: 'var(--gauge-fear)',
+      glowFilter: 'transparent',
+      lightColor: 'var(--gauge-fear)',
+      lightEndColor: 'var(--gauge-fear-end)',
+    },
   };
 
   // Map score to sentiment key

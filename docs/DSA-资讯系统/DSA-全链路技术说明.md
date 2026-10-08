@@ -308,11 +308,13 @@ def refresh_auto_sources(self, *, force: bool = False) -> Dict[str, Any]:
             waited_for_in_progress = True
             cls._auto_fetch_condition.wait()                            # :316-318
 
-        # ── 闸门 3：60 分钟冷却 ─────────────────────
+        # ── 闸门 3：冷却（NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS，默认 1200 秒）──
+        cooldown_seconds = int(config.news_intel_auto_fetch_min_interval_seconds
+                               or _AUTO_FETCH_MIN_INTERVAL_SECONDS)
         if (not force
                 and cls._auto_fetch_last_run_at is not None
                 and (now - cls._auto_fetch_last_run_at).total_seconds()
-                    < _AUTO_FETCH_MIN_INTERVAL_SECONDS):                # :321-326
+                    < cooldown_seconds):                                # :321-326
             return {"ok": True, "skipped": True, "reason": "cooldown"}
 
         cls._auto_fetch_in_progress = True
@@ -335,10 +337,18 @@ def refresh_auto_sources(self, *, force: bool = False) -> Dict[str, Any]:
             cls._auto_fetch_in_progress = False
 ```
 
-**冷却常量的定义**（`intelligence_service.py:39`）：
+**冷却时长的定义**（`intelligence_service.py:39` 是兜底默认值，实际取自配置）：
 
 ```python
-_AUTO_FETCH_MIN_INTERVAL_SECONDS = 60 * 60      # = 3600 秒 = 60 分钟
+_AUTO_FETCH_MIN_INTERVAL_SECONDS = 20 * 60      # = 1200 秒 = 20 分钟（兜底默认）
+
+# config.py 从 NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS 读取，
+# 默认 1200，parse_env_int 把取值 clamp 到 60 ~ 86400 秒。
+news_intel_auto_fetch_min_interval_seconds = parse_env_int(
+    os.getenv("NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS"), 20 * 60,
+    field_name="NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS",
+    minimum=60, maximum=24 * 60 * 60,
+)
 ```
 
 **要点**：
@@ -568,7 +578,7 @@ def _load_persisted_intelligence_context(
 
 | # | 要点 | 值 / 说明 |
 |---|---|---|
-| ① | 先尝试刷新 | 受 §2.2 三道闸门约束（总开关 / 并发锁 / 60 分钟冷却）|
+| ① | 先尝试刷新 | 受 §2.2 三道闸门约束（总开关 / 并发锁 / 冷却，默认 1200 秒、可配 60~86400）|
 | ② | 时效窗口 | `get_effective_news_window_days()`，默认 `NEWS_MAX_AGE_DAYS=3` |
 | ③ | **两级 scope 查找** | **先 `symbol`（该股票），查不到再 `market`（大盘）兜底** |
 | ④ | URL 去重 | `seen_urls` set |
@@ -941,7 +951,7 @@ Web 界面上的「用量」页数据来自 **`llm_usage` 表**，由 `api/v1/en
            │                       │  refresh_auto_sources()   ← 三道闸门         │
            │                       │    ├ 总开关 NEWS_INTEL_AUTO_FETCH_ENABLED   │
            │                       │    ├ 进程内并发锁                            │
-           │                       │    └ 60 分钟冷却                             │
+           │                       │    └ 冷却 1200s                              │
            │                       │  ensure_default_sources_enabled() ← 自动建源 │
            │                       │  _fetch_feed_entries()                       │
            │                       │    ├ newsnow → 解析 JSON                     │
@@ -1110,7 +1120,7 @@ for filters in symbol_filters + [{"scope_type": "market", "market": market}]:
 
 ## 亮点 4：基于组合键的幂等 upsert（去重 + 增量更新）
 
-**问题**：同一批资讯会被反复拉取（每 60 分钟冷却后、每次分析时）。如何保证不重复又能更新？
+**问题**：同一批资讯会被反复拉取（每过一个冷却窗口——默认 1200 秒、可配——以及每次分析时）。如何保证不重复又能更新？
 
 **设计**（`intelligence_repo.py:108-149`）：用 **6 字段组合键**判重：
 
@@ -1156,11 +1166,11 @@ url + source_type + scope_type + market + source_id(或 source_name) + scope_val
 |---|---|---|---|
 | **转换层缓存** | RSSHub `lib/config.ts:822` | **5 分钟** | 保护**上游网站**（不被打爆）|
 | | NewsNow `shared/consts.ts:6` | **30 分钟** | 同上 |
-| **DSA 拉取冷却** | `intelligence_service.py:39` | **60 分钟** | 保护**外部请求次数**（"为避免每只股票重复请求外部站点"）|
+| **DSA 拉取冷却** | `intelligence_service.py:39`（默认值） | **20 分钟**（`NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS`，`60`~`86400` 秒可配） | 保护**外部请求次数**（"为避免每只股票重复请求外部站点"）|
 
 **实测印证**：
 - RSSHub 缓存：第 1 次 0.114s → 第 2 次 0.021s（快 5 倍），响应头 `rsshub-cache-status: HIT`、`cache-control: max-age=300`
-- DSA 冷却：`_AUTO_FETCH_MIN_INTERVAL_SECONDS = 60 * 60`，且 `_auto_fetch_last_run_at` 是**类变量（进程内）**
+- DSA 冷却：默认 `_AUTO_FETCH_MIN_INTERVAL_SECONDS = 20 * 60`（1200 秒），实际时长取 `NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS`（clamp 到 60~86400），且 `_auto_fetch_last_run_at` 是**类变量（进程内）**
 
 **可讲的点**：这两层是**正交**的——转换层缓存的是"上游内容"，DSA 冷却的是"我方请求频率"。而且**冷却在分析多只股票时特别有价值**：一次分析 10 只股票只会真正拉取 1 次。
 
@@ -1236,7 +1246,6 @@ Efinance(P0) → Akshare(P1) → Pytdx(P2) → Baostock(P3) → Yfinance(P4) →
 |---|---|---|
 | **自动建源会复活手动禁用的源** | `ensure_default_sources_enabled()` 里 `update_source_enabled(existing.id, True)` 无条件执行；实测从 6 个源变成 11 个全启用 | 无法真正禁用某个源；会拉起用不上的美港股源 |
 | **只有 `intelligence_items` 有 retention** | `apply_retention` 只被 `intelligence_service.py:263` 调用 | `analysis_history`（单行 46KB）/ `news_intel` / `llm_usage` 无上限增长 |
-| **60 分钟冷却是硬编码常量** | `_AUTO_FETCH_MIN_INTERVAL_SECONDS = 60 * 60` | 无环境变量可调，要改代码 |
 | **`symbol` 级源需"一股一源"** | 当前 `symbol/600519` 两个源 | 股票池扩到 50 只就要建 100 个源，**扩展性差** |
 | **界面无资讯池页面** | 前端 `pages/` 下无 intelligence 页面 | 只能通过 API / DB / 报告间接观测 |
 | **NewsNow 的 `sv` 版本号陈旧** | `7.7.5` vs RSSHub 的 `8.7.9` | 上游改版后可能被拒 |

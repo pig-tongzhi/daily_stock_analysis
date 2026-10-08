@@ -82,9 +82,11 @@
   /* Sentiment indicator glow effect - Intensity adjustable via CSS */
   --glow-spread: 0px;
   --glow-intensity: 0;
-  --sentiment-greed-glow: hsl(var(--sentiment-greed) / var(--glow-intensity));
-  --sentiment-neutral-glow: hsl(var(--sentiment-neutral) / var(--glow-intensity));
-  --sentiment-fear-glow: hsl(var(--sentiment-fear) / var(--glow-intensity));
+  /* --gauge-* and --sentiment-* hold complete colours, so the glow alpha must
+     come from color-mix(), not hsl(var(--complete-colour) / a). */
+  --sentiment-greed-glow: color-mix(in srgb, var(--sentiment-greed) calc(var(--glow-intensity) * 100%), transparent);
+  --sentiment-neutral-glow: color-mix(in srgb, var(--sentiment-neutral) calc(var(--glow-intensity) * 100%), transparent);
+  --sentiment-fear-glow: color-mix(in srgb, var(--sentiment-fear) calc(var(--glow-intensity) * 100%), transparent);
 
   --bg-base: hsl(var(--background));
   --bg-card: hsl(var(--card));
@@ -201,7 +203,7 @@
   --home-rail-bg: linear-gradient(180deg, hsl(0 0% 100% / 0.98), hsl(var(--border) / 0.98));
   --home-rail-shadow: 0 14px 30px hsl(var(--border) / 0.09), 0 4px 10px hsl(var(--border) / 0.05);
   --home-history-glow: hsl(var(--primary) / 0.14);
-  --autocomplete-hover-bg: #04d1f6;
+  --autocomplete-hover-bg: hsl(var(--primary));
 
   /* Shadows (using HSL format) */
   --shadow-soft-card: 0 12px 24px hsl(var(--border) / 0.09), 0 3px 8px hsl(var(--border) / 0.05);
@@ -342,7 +344,7 @@
   --color-danger-alert-text: 349 100% 75%; /* Bright/light pink for dark mode */
   --color-danger-alert-border: 349 100% 63%;
   --color-danger-alert-bg: 349 100% 63%;
-  --autocomplete-hover-bg: #2dcae6;
+  --autocomplete-hover-bg: hsl(var(--primary));
   /* Tailwind-compatible accent colors (Dark theme) */
   --color-cyan-400: hsl(var(--primary));
   --color-emerald-400: hsl(var(--foreground) / 0.82);
@@ -361,9 +363,11 @@
   /* Sentiment indicator glow effect (Dark theme) - Stronger glow */
   --glow-spread: 0px;
   --glow-intensity: 0;
-  --sentiment-greed-glow: hsl(var(--sentiment-greed) / var(--glow-intensity));
-  --sentiment-neutral-glow: hsl(var(--sentiment-neutral) / var(--glow-intensity));
-  --sentiment-fear-glow: hsl(var(--sentiment-fear) / var(--glow-intensity));
+  /* --gauge-* and --sentiment-* hold complete colours, so the glow alpha must
+     come from color-mix(), not hsl(var(--complete-colour) / a). */
+  --sentiment-greed-glow: color-mix(in srgb, var(--sentiment-greed) calc(var(--glow-intensity) * 100%), transparent);
+  --sentiment-neutral-glow: color-mix(in srgb, var(--sentiment-neutral) calc(var(--glow-intensity) * 100%), transparent);
+  --sentiment-fear-glow: color-mix(in srgb, var(--sentiment-fear) calc(var(--glow-intensity) * 100%), transparent);
 
   --bg-base: hsl(var(--background));
   --bg-card: hsl(var(--card));
@@ -809,12 +813,12 @@
 
 .badge-success {
   background: rgba(0, 255, 136, 0.1);
-  color: var(--color-success);
+  color: hsl(var(--color-success));
 }
 
 .badge-danger {
   background: hsl(var(--foreground) / 0.1);
-  color: var(--color-danger);
+  color: hsl(var(--color-danger));
 }
 
 /* ============ List Item Styles ============ */
@@ -1009,20 +1013,21 @@
 .text-primary {
   color: var(--color-cyan);
 }
+/* --color-*-400 / --color-purple 是完整颜色值，直接用 var()，不能再套 hsl()。 */
 .text-cyan-400 {
-  color: hsl(var(--color-cyan-400));
+  color: var(--color-cyan-400);
 }
 .text-emerald-400 {
-  color: hsl(var(--color-emerald-400));
+  color: var(--color-emerald-400);
 }
 .text-red-400 {
-  color: hsl(var(--color-red-400));
+  color: var(--color-red-400);
 }
 .text-amber-400 {
-  color: hsl(var(--color-amber-400));
+  color: var(--color-amber-400);
 }
 .text-purple {
-  color: hsl(var(--color-purple));
+  color: var(--color-purple);
 }
 .text-success {
   color: hsl(var(--color-success));
@@ -1920,7 +1925,7 @@ textarea {
 }
 
 .home-markdown-prose :where(h2) {
-  color: hsl(var(--color-purple));
+  color: var(--color-purple);
 }
 
 .home-markdown-prose :where(code) {
@@ -2280,7 +2285,7 @@ textarea {
 
 .prose :where(h2) {
   font-size: 1rem;
-  color: hsl(var(--color-purple));
+  color: var(--color-purple);
 }
 
 .prose :where(h3) {
@@ -2431,8 +2436,8 @@ textarea {
 }
 
 .chat-prose blockquote {
-  border-color: hsl(var(--color-purple) / 0.3);
-  background: hsl(var(--color-purple) / 0.08);
+  border-color: color-mix(in srgb, var(--color-purple) 30%, transparent);
+  background: color-mix(in srgb, var(--color-purple) 8%, transparent);
   border-radius: 0 0.75rem 0.75rem 0;
   padding: 0.5rem 1rem;
   color: var(--text-secondary-text);
@@ -2590,7 +2595,7 @@ textarea {
 }
 
 .dark .chat-prose h2 {
-  color: hsl(var(--color-purple));
+  color: var(--color-purple);
 }
 
 .dark .session-item .title,
