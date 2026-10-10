@@ -866,6 +866,23 @@ class RuntimeSchedulerService:
             "name": name,
         }]
 
+    def _has_enabled_background_tasks(self, config: Config) -> bool:
+        """是否有任何后台维护任务被启用。
+
+        后台维护（到期验证、行情刷新、事件监控）与"每日跑一次全量分析"是两件
+        互不依赖的事：前者按分钟级节奏维护数据，后者是每天一次的重活。
+        若后者关闭就不启动调度线程，那些维护任务会永远不运行 —— 这正是
+        decision_signal_outcomes 长期为空的原因之一。
+        """
+        for attr in (
+            "decision_signal_outcome_auto_run_enabled",
+            "stock_daily_refresh_enabled",
+            "agent_event_monitor_enabled",
+        ):
+            if getattr(config, attr, False):
+                return True
+        return False
+
     def _current_agent_event_monitor_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "agent_event_monitor"
         if not getattr(config, "agent_event_monitor_enabled", False):
@@ -920,10 +937,13 @@ class RuntimeSchedulerService:
                 self.stop()
                 return
             config = self._config_provider()
-            if not self._is_schedule_enabled(config):
+            schedule_enabled = self._is_schedule_enabled(config)
+            background_tasks = self._current_background_tasks(config)
+            # 每日分析关闭、但存在后台维护任务时仍须启动调度线程：
+            # 否则到期验证与行情刷新永远不会运行。
+            if not schedule_enabled and not background_tasks:
                 self.stop()
                 return
-            background_tasks = self._current_background_tasks(config)
             self.stop()
             with self._analysis_process_lock:
                 generation = self._analysis_generation
@@ -941,13 +961,15 @@ class RuntimeSchedulerService:
                 schedule_times_provider=self._current_times,
                 register_signals=False,
             )
-            if run_immediately and self._run_immediately_in_background:
-                scheduler.set_daily_task(scheduled_analysis, run_immediately=False)
-            else:
-                scheduler.set_daily_task(
-                    scheduled_analysis,
-                    run_immediately=run_immediately,
-                )
+            if schedule_enabled:
+                # 只有每日分析开启时才注册每日任务；否则调度线程仅服务后台维护。
+                if run_immediately and self._run_immediately_in_background:
+                    scheduler.set_daily_task(scheduled_analysis, run_immediately=False)
+                else:
+                    scheduler.set_daily_task(
+                        scheduled_analysis,
+                        run_immediately=run_immediately,
+                    )
             for entry in background_tasks:
                 scheduler.add_background_task(
                     entry["task"],
@@ -993,7 +1015,8 @@ class RuntimeSchedulerService:
             self.stop()
             return
         config = self._config_provider()
-        if self._is_schedule_enabled(config):
+        # 每日分析或任一后台维护任务启用，都应保持调度线程运行。
+        if self._is_schedule_enabled(config) or self._has_enabled_background_tasks(config):
             self.start(run_immediately=run_immediately)
         else:
             self.stop()
