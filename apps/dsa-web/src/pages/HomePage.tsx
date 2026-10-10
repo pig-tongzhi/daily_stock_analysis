@@ -10,6 +10,7 @@ import { systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Button, Drawer, EmptyState, InlineAlert } from '../components/common';
 import { DashboardStateBlock } from '../components/dashboard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
+import { HomeDashboard } from '../components/home/HomeDashboard';
 import { StockHistoryTrendDrawer } from '../components/history';
 import { ReportMarkdownDrawer } from '../components/report/ReportMarkdownDrawer';
 import { MarketReviewReportView } from '../components/report/MarketReviewReportView';
@@ -1724,6 +1725,13 @@ const HomePage: React.FC = () => {
             data-testid="home-dashboard-scroll"
             className="flex-1 min-w-0 min-h-0 overflow-x-auto overflow-y-auto px-3 pb-4 md:px-6 touch-pan-y"
           >
+            {/* 首页曾经只有“开始分析”空态，打开后看不到任何结论；这里把已落库的真实数据
+                （AI 建议 / 资讯 / 分析历史 / 自选股）作为内容区第一块展示，原有分析与报告视图保留在下方。 */}
+            <HomeDashboard
+              watchlistCodes={watchlistState.watchlistCodes}
+              watchlistLoading={watchlistState.isLoading}
+            />
+
             {marketReviewNotice ? (
               <div className="mb-3">
                 <InlineAlert

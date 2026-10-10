@@ -66,6 +66,31 @@ vi.mock('../../api/agent', () => ({
   },
 }));
 
+// 首页顶部看板（HomeDashboard）会自己拉取这几类数据；不隔离的话测试会打到真实网络，
+// 并在断言 role="alert" 时混入看板的错误提示。
+vi.mock('../../api/decisionSignals', () => ({
+  decisionSignalsApi: {
+    getOutcomeStats: vi.fn().mockResolvedValue({
+      engineVersion: 'test',
+      statuses: [],
+      total: 0,
+      completed: 0,
+      unable: 0,
+      hit: 0,
+      miss: 0,
+      neutral: 0,
+      hitRatePct: null,
+      unableReasons: {},
+      breakdowns: {},
+    }),
+    list: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 5 }),
+  },
+}));
+
+vi.mock('../../api/intelligence', () => ({
+  fetchIntelligenceItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 5 }),
+}));
+
 vi.mock('../../hooks/useTaskStream', () => ({
   useTaskStream: vi.fn(),
 }));
