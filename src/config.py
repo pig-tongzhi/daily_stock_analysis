@@ -1061,6 +1061,10 @@ class Config:
     # tick 与频率分离：循环定期敲门，真正的频率由既有的 20 分钟冷却决定。
     news_intel_fetch_loop_enabled: bool = False
     news_intel_fetch_loop_interval_minutes: int = 30
+    # 公司档案的定时全量重算。按需路径只覆盖新分析到的股票；这个任务兜住历史回填
+    # 与分类规则改动后的重算。默认关闭，与其它后台任务一致。
+    company_profile_refresh_enabled: bool = False
+    company_profile_refresh_interval_minutes: int = 360
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -2081,6 +2085,15 @@ class Config:
                 os.getenv('NEWS_INTEL_FETCH_LOOP_INTERVAL_MINUTES'),
                 30,
                 field_name='NEWS_INTEL_FETCH_LOOP_INTERVAL_MINUTES',
+                minimum=1,
+            ),
+            company_profile_refresh_enabled=os.getenv(
+                'COMPANY_PROFILE_REFRESH_ENABLED', 'false'
+            ).lower() == 'true',
+            company_profile_refresh_interval_minutes=parse_env_int(
+                os.getenv('COMPANY_PROFILE_REFRESH_INTERVAL_MINUTES'),
+                360,
+                field_name='COMPANY_PROFILE_REFRESH_INTERVAL_MINUTES',
                 minimum=1,
             ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),

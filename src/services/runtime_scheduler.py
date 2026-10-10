@@ -366,6 +366,56 @@ def build_news_intel_fetch_background_tasks(
     }]
 
 
+def _company_profile_refresh_interval_seconds(config: Config) -> int:
+    interval_minutes = getattr(config, "company_profile_refresh_interval_minutes", 360)
+    try:
+        minutes = int(interval_minutes)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid COMPANY_PROFILE_REFRESH_INTERVAL_MINUTES=%r; use fallback 360",
+            interval_minutes,
+        )
+        minutes = 360
+    return minutes * 60 if minutes > 0 else 21600
+
+
+def build_company_profile_refresh_background_tasks(
+    config: Config,
+    *,
+    config_provider: Callable[[], Config],
+) -> List[Dict[str, Any]]:
+    """周期性全量重算公司档案。
+
+    按需路径（save_fundamental_snapshot 里）只覆盖"新分析到的股票"；这个任务兜住
+    两件事：历史快照的回填，以及分类规则改动后的重算 —— 否则改了申万名单或噪音
+    规则，已有档案不会跟着更新。
+    """
+    if not getattr(config, "company_profile_refresh_enabled", False):
+        return []
+
+    interval_seconds = _company_profile_refresh_interval_seconds(config)
+
+    def refresh_task() -> None:
+        try:
+            from src.services.company_profile_service import sync_from_snapshots
+
+            profiles, metrics = sync_from_snapshots()
+            logger.info(
+                "[CompanyProfileRefresh] profiles=%s metrics=%s", profiles, metrics
+            )
+        except Exception:
+            # 单次失败不能让任务永久死掉；下一轮继续。
+            logger.exception("[CompanyProfileRefresh] scheduled run failed")
+
+    return [{
+        "task": refresh_task,
+        "interval_seconds": interval_seconds,
+        # 档案是慢变数据，启动时不必抢一次；等第一个周期即可。
+        "run_immediately": False,
+        "name": "company_profile_refresh",
+    }]
+
+
 def _stock_daily_refresh_interval_seconds(config: Config) -> int:
     interval_minutes = getattr(config, "stock_daily_refresh_interval_minutes", 60)
     try:
@@ -862,7 +912,42 @@ class RuntimeSchedulerService:
             *self._current_decision_signal_outcome_background_tasks(config),
             *self._current_stock_daily_refresh_background_tasks(config),
             *self._current_news_intel_fetch_background_tasks(config),
+            *self._current_company_profile_refresh_background_tasks(config),
         ]
+
+    def _current_company_profile_refresh_background_tasks(
+        self, config: Config
+    ) -> List[Dict[str, Any]]:
+        name = "company_profile_refresh"
+        if not getattr(config, "company_profile_refresh_enabled", False):
+            self._background_task_cache.pop(name, None)
+            self._background_task_registered_names.discard(name)
+            return []
+
+        cached = self._background_task_cache.get(name)
+        if cached is None:
+            entries = build_company_profile_refresh_background_tasks(
+                config,
+                config_provider=self._reload_config,
+            )
+            if not entries:
+                self._background_task_cache.pop(name, None)
+                self._background_task_registered_names.discard(name)
+                return []
+            cached = dict(entries[0])
+            cached["name"] = name
+            self._background_task_cache[name] = cached
+            interval_seconds = int(cached["interval_seconds"])
+        else:
+            interval_seconds = _company_profile_refresh_interval_seconds(config)
+
+        self._background_task_registered_names.add(name)
+        return [{
+            "task": cached["task"],
+            "interval_seconds": interval_seconds,
+            "run_immediately": bool(cached.get("run_immediately", False)),
+            "name": name,
+        }]
 
     def _current_news_intel_fetch_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "news_intel_fetch"
@@ -975,6 +1060,7 @@ class RuntimeSchedulerService:
             "decision_signal_outcome_auto_run_enabled",
             "stock_daily_refresh_enabled",
             "news_intel_fetch_loop_enabled",
+            "company_profile_refresh_enabled",
             "agent_event_monitor_enabled",
         ):
             if getattr(config, attr, False):

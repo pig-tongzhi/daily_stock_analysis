@@ -2586,16 +2586,33 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                     FundamentalSnapshot(
                         query_id=query_id,
                         code=code,
+                        # 必须在这里写入：公司档案的同步按 canonical_id 查快照，
+                        # 不设的话刚写的这一行查不到，按需同步就永远空转。
+                        canonical_id=self._derive_canonical_id(code),
                         payload=self._safe_json_dumps(payload),
                         source_chain=self._safe_json_dumps(source_chain or []),
                         coverage=self._safe_json_dumps(coverage or {}),
                     )
                 )
                 return 1
-            return self._run_write_transaction(
+            written = self._run_write_transaction(
                 f"save_fundamental_snapshot[{query_id}:{code}]",
                 _write,
             )
+            if written:
+                # 按需路径：快照一写入就同步公司档案，这样只要某只股票被分析过，
+                # 它的行业/概念/估值立刻可查 —— 而不是等定时任务或人工跑脚本。
+                # 同步失败绝不影响快照本身（它已经是既有的 write-only 语义）。
+                try:
+                    from src.services.company_profile_service import sync_from_snapshots
+
+                    sync_from_snapshots(code=code)
+                except Exception:
+                    logger.debug(
+                        "[CompanyProfile] 快照写入后同步失败（fail-open）: code=%s", code,
+                        exc_info=True,
+                    )
+            return written
         except Exception as e:
             logger.debug(
                 "基本面快照写入失败（fail-open）: query_id=%s code=%s err=%s",

@@ -1264,3 +1264,39 @@ def test_news_intel_fetch_is_opt_in_and_decoupled_from_analysis() -> None:
 
     config.news_intel_fetch_loop_interval_minutes = 45
     assert _news_intel_fetch_interval_seconds(config) == 2700
+
+
+def test_company_profile_refresh_is_opt_in() -> None:
+    """公司档案的定时重算必须默认关闭，且经聚合入口可见。
+
+    按需路径（save_fundamental_snapshot）只覆盖新分析到的股票；没有这个任务，
+    历史快照不会回填，改了申万名单或噪音规则已有档案也不会跟着更新。
+    """
+    from src.config import get_config
+    from src.services.runtime_scheduler import (
+        RuntimeSchedulerService,
+        _company_profile_refresh_interval_seconds,
+    )
+
+    config = get_config()
+    service = RuntimeSchedulerService(owns_schedule=True)
+
+    config.company_profile_refresh_enabled = False
+    assert service._current_company_profile_refresh_background_tasks(config) == []
+    assert all(
+        t["name"] != "company_profile_refresh"
+        for t in service._current_background_tasks(config)
+    )
+
+    config.company_profile_refresh_enabled = True
+    tasks = service._current_company_profile_refresh_background_tasks(config)
+    assert len(tasks) == 1
+    assert tasks[0]["name"] == "company_profile_refresh"
+    assert tasks[0]["interval_seconds"] == 21600  # 6 小时
+    assert "company_profile_refresh" in {
+        t["name"] for t in service._current_background_tasks(config)
+    }
+
+    for bad in (0, -1, "x", None):
+        config.company_profile_refresh_interval_minutes = bad
+        assert _company_profile_refresh_interval_seconds(config) == 21600
