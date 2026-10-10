@@ -840,3 +840,60 @@ def test_batch_uses_oldest_retryable_horizon_timestamp_for_signal_order(isolated
 
     assert result["updated"] == 2
     assert {item["signal_id"] for item in result["items"]} == {multi_horizon_id}
+
+
+def test_anchor_date_resolves_holiday_session_to_last_trading_day(isolated_db) -> None:
+    """会话日落在假期时，锚点必须解析到假期前最后一个交易日。
+
+    全部 19 个历史信号的 session_date 是 2026-10-02 / 10-05（国庆假期，无 K 线）。
+    直接采用会话日会让每个信号都变成 missing_anchor_price，验证永远无法完成。
+    """
+    from datetime import date as _date
+
+    watch_id = _add_signal(isolated_db, code="600519", action="watch", session_date="2026-10-02")
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    with isolated_db.session_scope() as session:
+        signal = session.get(DecisionSignalRecord, watch_id)
+        assert service._anchor_date(signal) == _date(2026, 9, 30)
+
+
+def test_anchor_date_prefers_effective_daily_bar_date(isolated_db) -> None:
+    """effective_daily_bar_date 是文档指定的主要权威，必须优先于会话日。"""
+    from datetime import date as _date
+
+    signal_id = _add_signal(isolated_db, code="600519", action="watch", session_date="2026-10-02")
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    with isolated_db.session_scope() as session:
+        record = session.get(DecisionSignalRecord, signal_id)
+        metadata = json.loads(record.metadata_json)
+        metadata["market_phase_summary"]["effective_daily_bar_date"] = "2026-09-29"
+        record.metadata_json = json.dumps(metadata)
+        assert service._anchor_date(record) == _date(2026, 9, 29)
+
+
+def test_anchor_date_keeps_raw_value_when_calendar_cannot_resolve(isolated_db) -> None:
+    """解析失败时保留原值 —— 新增的解析步骤不得让结果变得更差。
+
+    交易日 + phase=non_trading 是日历上的矛盾，解析器会 fail-closed；
+    此时必须退回会话日本身，而不是返回 None。
+    """
+    from datetime import date as _date
+
+    signal_id = _add_signal(isolated_db, code="600519", action="watch", session_date="2026-10-08")
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    with isolated_db.session_scope() as session:
+        record = session.get(DecisionSignalRecord, signal_id)
+        assert service._anchor_date(record) == _date(2026, 10, 8)
+
+
+def test_anchor_date_unknown_market_keeps_raw_value(isolated_db) -> None:
+    """未知市场无法解析日历，同样保留原值。"""
+    from datetime import date as _date
+
+    signal_id = _add_signal(
+        isolated_db, code="600519", market="xx", action="watch", session_date="2026-10-02"
+    )
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    with isolated_db.session_scope() as session:
+        record = session.get(DecisionSignalRecord, signal_id)
+        assert service._anchor_date(record) == _date(2026, 10, 2)

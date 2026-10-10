@@ -12,6 +12,7 @@ import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.core.backtest_engine import BacktestEngine, EvaluationConfig
+from src.core.trading_calendar import resolve_historical_daily_bar_date
 from src.repositories.decision_signal_outcome_repo import (
     DecisionSignalOutcomeRepository,
     OutcomeStatsRow,
@@ -700,14 +701,43 @@ class DecisionSignalOutcomeService:
         }
 
     def _anchor_date(self, signal: DecisionSignalRecord) -> Optional[date]:
+        """The trading day whose close this signal's expectation is measured from.
+
+        优先级（依 resolve_historical_daily_bar_date 的文档，effective_daily_bar_date
+        才是主要权威）：
+
+          1. ``market_phase_summary.effective_daily_bar_date`` —— 创建时已解析好的权威值
+          2. 用交易日历解析 ``session_date``
+          3. 同上解析 ``created_at``
+
+        为什么需要 2/3：全部 19 个历史信号都缺 effective_daily_bar_date，而它们的
+        session_date 是 2026-10-02 / 10-05（国庆假期，无 K 线）。直接采用会话日会
+        得到 missing_anchor_price 并永久无法评分。交易日历能把假期映射到假期前最后
+        一个交易日（2026-09-30），那里有数据。
+
+        解析失败时【保留原值】而不是返回 None —— 宁可维持既有行为，也不要因为新增
+        的解析步骤让结果变得更差。
+        """
         metadata = self._json_loads(signal.metadata_json)
+        session_date: Optional[date] = None
+        phase: Optional[str] = None
         if isinstance(metadata, dict):
             summary = metadata.get("market_phase_summary")
             if isinstance(summary, dict):
-                parsed = self._parse_date(summary.get("session_date"))
-                if parsed is not None:
-                    return parsed
-        return self._parse_date(signal.created_at)
+                effective = self._parse_date(summary.get("effective_daily_bar_date"))
+                if effective is not None:
+                    return effective
+                session_date = self._parse_date(summary.get("session_date"))
+                raw_phase = summary.get("phase")
+                phase = str(raw_phase).strip().lower() if raw_phase else None
+
+        target = session_date if session_date is not None else self._parse_date(signal.created_at)
+        if target is None:
+            return None
+        resolved = resolve_historical_daily_bar_date(
+            signal.market, target, phase or "non_trading"
+        )
+        return resolved if resolved is not None else target
 
     def _data_quality_level(self, signal: DecisionSignalRecord) -> str:
         raw_summary = signal.data_quality_summary_json
