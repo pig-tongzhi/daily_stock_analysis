@@ -30,6 +30,7 @@ type RouteErrorBoundaryProps = {
     description: string;
     reload: string;
     backHome: string;
+    updating: string;
   };
 };
 
@@ -41,12 +42,21 @@ type RouteErrorBoundaryState = {
    * 保留原文后，用户看到的、截图给我的就是确切原因。
    */
   detail: string;
+  /**
+   * 因 stale chunk 正在自动重载。
+   *
+   * 重建后旧标签页会请求已不存在的分包，此时自动重载是对的，但此前仍会先把
+   * 错误卡片渲染出来、再被重载打断 —— 用户看到的就是「点进去先报一次失败」。
+   * 既然是可自动恢复的情况，就不该显示失败，而应显示正在更新。
+   */
+  reloading: boolean;
 };
 
 class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBoundaryState> {
   override state: RouteErrorBoundaryState = {
     hasError: false,
     detail: '',
+    reloading: false,
   };
 
   static getDerivedStateFromError(error: unknown): RouteErrorBoundaryState {
@@ -56,7 +66,7 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBo
         : typeof error === 'string'
           ? error
           : String(error);
-    return { hasError: true, detail };
+    return { hasError: true, detail, reloading: false };
   }
 
   override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
@@ -69,20 +79,37 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBo
     // A rebuilt bundle leaves this page holding stale chunk URLs, which surfaces
     // here as a failed dynamic import rather than anything the user did wrong.
     // Reload once to pick up the new manifest; anything else keeps the card.
-    if (isChunkLoadError(error)) {
-      reloadForFreshBundle();
+    if (isChunkLoadError(error) && reloadForFreshBundle()) {
+      // 重载已经发起：把卡片换成「正在更新」，别让可自愈的情况显示成失败。
+      this.setState({ reloading: true });
     }
   }
 
   override componentDidUpdate(prevProps: RouteErrorBoundaryProps) {
     if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
-      this.setState({ hasError: false, detail: '' });
+      this.setState({ hasError: false, detail: '', reloading: false });
     }
   }
 
   override render() {
     if (!this.state.hasError) {
       return this.props.children;
+    }
+
+    // 可自动恢复：显示正在更新，而不是一张会被立刻打断的失败卡片。
+    if (this.state.reloading) {
+      return (
+        <div
+          className={
+            this.props.fullPage
+              ? 'flex min-h-screen flex-col items-center justify-center gap-4 bg-base px-4'
+              : 'flex min-h-[60vh] flex-col items-center justify-center gap-4 px-2 py-8'
+          }
+        >
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan/20 border-t-cyan" />
+          <p className="text-sm text-secondary-text">{this.props.text.updating}</p>
+        </div>
+      );
     }
 
     return (
@@ -148,6 +175,7 @@ export const RouteBoundary: React.FC<{ children: React.ReactNode; fullPage?: boo
         description: t('routeError.description'),
         reload: t('routeError.reload'),
         backHome: t('routeError.backHome'),
+        updating: t('routeError.updating'),
       }}
     >
       <Suspense fallback={<PageLoadingFallback fullPage={fullPage} />}>{children}</Suspense>

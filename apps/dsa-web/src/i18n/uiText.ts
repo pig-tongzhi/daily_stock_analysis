@@ -161,6 +161,7 @@ const zh = {
 
   'routeError.backHome': '返回首页',
   'routeError.description': '当前页面资源或组件未能正常加载，可能是网络中断或页面版本已更新。请重新加载页面，或返回首页后再试。',
+  'routeError.updating': '正在更新到最新版本…',
   'routeError.reload': '重新加载页面',
   'routeError.title': '页面加载失败',
   'notFound.backHome': '返回首页',
@@ -1154,6 +1155,7 @@ const en: Record<UiTextKey, string> = {
 
   'routeError.backHome': 'Back home',
   'routeError.description': 'This page or component could not load. The network may be unavailable, or the page version may have changed. Reload the page or return home and try again.',
+  'routeError.updating': 'Updating to the latest version…',
   'routeError.reload': 'Reload page',
   'routeError.title': 'Page failed to load',
   'notFound.backHome': 'Back home',

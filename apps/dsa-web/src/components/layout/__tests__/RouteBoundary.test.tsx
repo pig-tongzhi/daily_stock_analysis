@@ -100,3 +100,101 @@ describe('RouteOutletBoundary error detail', () => {
     }
   });
 });
+
+describe('RouteOutletBoundary stale-chunk recovery', () => {
+  it('shows 正在更新 instead of the failure card when a chunk is stale', async () => {
+    // 重建后旧标签页会请求已不存在的分包。此前会先把失败卡片渲染出来、再被
+    // 自动重载打断，用户看到的就是「点进去先报一次失败」——可自愈的情况
+    // 不该显示成失败。
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reload = vi.fn();
+    const originalReload = window.location.reload;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, reload },
+    });
+    window.sessionStorage.clear();
+
+    const StaleChunkRoute = lazy(() => (
+      Promise.reject(new TypeError('Failed to fetch dynamically imported module: /assets/x.js')) as Promise<{
+        default: React.ComponentType;
+      }>
+    ));
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/chat']}>
+          <Routes>
+            <Route
+              element={(
+                <Shell>
+                  <RouteOutletBoundary />
+                </Shell>
+              )}
+            >
+              <Route path="/chat" element={<StaleChunkRoute />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByText('正在更新到最新版本…')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: '页面加载失败' })).not.toBeInTheDocument();
+      expect(reload).toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { ...window.location, reload: originalReload },
+      });
+      window.sessionStorage.clear();
+    }
+  });
+
+  it('keeps the failure card when the same chunk fails again within the guard window', async () => {
+    // 守卫必须真的生效：构建本身损坏时不能无限重载，要落回失败卡片。
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const reload = vi.fn();
+    const originalReload = window.location.reload;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...window.location, reload },
+    });
+    // 模拟刚刚已经重载过一次
+    window.sessionStorage.setItem('dsh.chunkReloadAt', String(Date.now()));
+
+    const StaleChunkRoute = lazy(() => (
+      Promise.reject(new TypeError('Failed to fetch dynamically imported module: /assets/y.js')) as Promise<{
+        default: React.ComponentType;
+      }>
+    ));
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/chat']}>
+          <Routes>
+            <Route
+              element={(
+                <Shell>
+                  <RouteOutletBoundary />
+                </Shell>
+              )}
+            >
+              <Route path="/chat" element={<StaleChunkRoute />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      expect(await screen.findByRole('heading', { name: '页面加载失败' })).toBeInTheDocument();
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { ...window.location, reload: originalReload },
+      });
+      window.sessionStorage.clear();
+    }
+  });
+});
