@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import date, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -494,7 +495,13 @@ def test_not_up_uses_defensive_direction_not_down_direction(isolated_db) -> None
     assert miss["outcome"] == "miss"
 
 
-def test_unable_reasons_are_persisted_for_non_directional_and_unsupported_horizon(isolated_db) -> None:
+def test_watch_is_scorable_as_range_and_unsupported_horizon_stays_unable(isolated_db) -> None:
+    """「观望」是区间预期，可被评分；只有 alert 与不支持的 horizon 才是 unable。
+
+    这条契约此前恰好相反（watch → non_directional_action），且该原因不可重试，
+    使 18/19 个历史信号成为永久死路，验证闭环从未闭合。现与两处既有语义对齐：
+    权威刻度（40-59 → 观望）与 BacktestEngine.infer_direction_expected("观望") == "flat"。
+    """
     watch_id = _add_signal(isolated_db, action="watch", horizon="3d")
     intraday_buy_id = _add_signal(isolated_db, code="000001", action="buy", horizon="intraday")
     _seed_bars(isolated_db, code="600519", closes=[103, 104, 105])
@@ -506,31 +513,32 @@ def test_unable_reasons_are_persisted_for_non_directional_and_unsupported_horizo
     watch_skipped = service.run_outcomes(signal_id=watch_id)
     intraday_skipped = service.run_outcomes(signal_id=intraday_buy_id)
 
-    assert watch["eval_status"] == "unable"
-    assert watch["unable_reason"] == "non_directional_action"
+    # 区间预期可评分：锚点 100 → 期末 105 = +5.0%，超出 ±2% 中性带 → miss
+    assert watch["eval_status"] == "completed"
+    assert watch["direction_expected"] == "flat"
+    assert watch["outcome"] == "miss"
+    # 不支持的 horizon 仍不可评分
     assert intraday["eval_status"] == "unable"
     assert intraday["unable_reason"] == "unsupported_horizon"
+    # 已完成与不可重试的 unable 都不重复计算
     assert watch_skipped["evaluated"] == 0
     assert watch_skipped["skipped"] == 1
     assert intraday_skipped["evaluated"] == 0
     assert intraday_skipped["skipped"] == 1
 
 
-def test_watch_and_alert_outcomes_remain_unable_without_market_reads(isolated_db) -> None:
+def test_alert_outcome_remains_unable_without_market_reads(isolated_db) -> None:
+    """alert 是提醒，没有方向语义 —— 必须保持不可评分，且不得消耗行情读取。
+
+    这条约束仍然成立：alert 无法被证伪，所以不该为它花任何行情查询。
+    """
     class FailOnMarketRead:
         def get_daily_on_date(self, **_kwargs):
-            raise AssertionError("watch/alert outcome must not read anchor prices")
+            raise AssertionError("alert outcome must not read anchor prices")
 
         def get_forward_bars(self, **_kwargs):
-            raise AssertionError("watch/alert outcome must not read forward bars")
+            raise AssertionError("alert outcome must not read forward bars")
 
-    watch_id = _add_signal(
-        isolated_db,
-        code="000101",
-        action="watch",
-        decision_profile="balanced",
-        profile_source="auto_default",
-    )
     alert_id = _add_signal(
         isolated_db,
         code="000102",
@@ -543,18 +551,93 @@ def test_watch_and_alert_outcomes_remain_unable_without_market_reads(isolated_db
         stock_repo=FailOnMarketRead(),
     )
 
-    watch = service.run_outcomes(signal_id=watch_id)["items"][0]
     alert = service.run_outcomes(signal_id=alert_id)["items"][0]
     stats = service.get_stats()
 
-    assert watch["eval_status"] == "unable"
     assert alert["eval_status"] == "unable"
-    assert watch["start_price"] is None
+    assert alert["unable_reason"] == "non_directional_action"
     assert alert["start_price"] is None
     profile_bucket = stats["profile_calibration"]["breakdowns"]["decision_profile"][0]
     assert profile_bucket["completed"] == 0
-    assert profile_bucket["total"] == 2
+    assert profile_bucket["total"] == 1
     assert profile_bucket["max_adverse_excursion_pct"] is None
+
+
+def test_watch_outcome_reads_market_and_scores_as_range(isolated_db) -> None:
+    """与 alert 相反：watch 是区间预期，必须读取行情才能评分。
+
+    这是本次契约变更的核心 —— 区间预期是可证伪的，因此值得花一次行情查询；
+    而正因为它可证伪，它也必须被单独统计，不能混进方向性命中率（见
+    test_range_outcomes_are_excluded_from_directional_calibration）。
+    """
+    watch_id = _add_signal(
+        isolated_db,
+        code="000101",
+        action="watch",
+        decision_profile="balanced",
+        profile_source="auto_default",
+    )
+    _seed_bars(isolated_db, code="000101", closes=[100.5, 100.8, 101.0])
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+
+    watch = service.run_outcomes(signal_id=watch_id)["items"][0]
+
+    # 锚点 100 → 期末 101.0 = +1.0%，落在 ±2% 中性带内 → hit
+    assert watch["eval_status"] == "completed"
+    assert watch["direction_expected"] == "flat"
+    assert watch["outcome"] == "hit"
+    assert watch["start_price"] == 100.0
+
+
+def test_range_outcomes_are_excluded_from_directional_calibration() -> None:
+    """区间成绩不得进入方向性校准 —— 否则指标会奖励"从不下判断"。
+
+    构造一个"懦弱但看起来准"的场景：12 个区间命中、3 个方向性命中。
+    混合命中率 100%，看起来完美；但校准只看方向性样本（3 < 10）→ observe。
+    如果没有这一步分离，confidence_adjustment 会因 100% 被上调，
+    从而主动把模型推向"永远说观望"。
+    """
+    from src.services.decision_signal_outcome_service import (
+        DIRECTIONAL_EXPECTATIONS,
+        MIN_REVIEW_SAMPLE_SIZE,
+        DecisionSignalOutcomeService,
+    )
+
+    assert "flat" not in DIRECTIONAL_EXPECTATIONS
+
+    def _outcome(direction: str, outcome: str):
+        return SimpleNamespace(
+            eval_status="completed",
+            outcome=outcome,
+            direction_expected=direction,
+            stock_return_pct=1.0,
+            unable_reason=None,
+        )
+
+    rows = [_outcome("flat", "hit") for _ in range(12)] + [
+        _outcome("up", "hit"),
+        _outcome("up", "hit"),
+        _outcome("up", "hit"),
+    ]
+    aggregate = DecisionSignalOutcomeService._aggregate(rows)
+
+    # 混合指标被"区间"主导，看起来很好
+    assert aggregate["hit_rate_pct"] == 100.0
+    # 但校准依据是方向性样本，只有 3 个 —— 不足以校准
+    assert aggregate["directional_completed"] == 3
+    assert aggregate["directional_completed"] < MIN_REVIEW_SAMPLE_SIZE
+    assert aggregate["directional_hit_rate_pct"] == 100.0
+    assert aggregate["range_completed"] == 12
+    assert aggregate["range_hit_rate_pct"] == 100.0
+
+    # 反向场景：区间很差但方向性样本充足时，校准必须反映方向性成绩
+    rows2 = [_outcome("flat", "miss") for _ in range(12)] + [
+        _outcome("up", "miss") for _ in range(10)
+    ]
+    aggregate2 = DecisionSignalOutcomeService._aggregate(rows2)
+    assert aggregate2["directional_completed"] == 10
+    assert aggregate2["directional_hit_rate_pct"] == 0.0
+    assert aggregate2["range_hit_rate_pct"] == 0.0
 
 
 def test_missing_anchor_price_is_retried_after_data_arrives(isolated_db) -> None:

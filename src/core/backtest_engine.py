@@ -672,6 +672,15 @@ class BacktestEngine:
                 return "hit", True
             return "miss", False
 
+        # 区间预期：「观望」预测价格留在中性带内，命中 = |收益| <= band。
+        # 这一支与 _classify_outcome（legacy 路径）保持一致 —— 那条路径早已
+        # 实现同样语义，而这条较新的 DecisionSignal 路径当初漏掉了它，使
+        # 最常见的 action 永远无法被评分。注意本路径用 hit/miss，legacy 用 win/loss。
+        if direction_expected == "flat":
+            if abs(r) <= band:
+                return "hit", True
+            return "miss", False
+
         return None, None
 
     @staticmethod

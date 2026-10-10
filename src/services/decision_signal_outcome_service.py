@@ -47,6 +47,12 @@ SUPPORTED_OUTCOME_HORIZONS = {
 }
 DEFAULT_STATS_STATUSES = ("active", "expired", "invalidated", "closed")
 OUTCOME_VALUES = frozenset({"hit", "miss", "neutral"})
+# 方向性预期 vs 区间预期。区分二者是必需的：区间判断（「观望」）的命中
+# 门槛天然更容易达到，如果把它混进方向性命中率，一个从不下方向判断的
+# 模型反而会因为"区间说对了"而获得置信度上调 —— 指标会奖励懦弱。
+# 因此校准只看方向性样本，区间成绩单独报告。
+DIRECTIONAL_EXPECTATIONS = frozenset({"up", "not_down", "not_up"})
+RANGE_EXPECTATIONS = frozenset({"flat"})
 EVAL_STATUSES = frozenset({"completed", "unable"})
 FEEDBACK_VALUES = frozenset({"useful", "not_useful"})
 FEEDBACK_SOURCES = frozenset({"web", "api"})
@@ -424,13 +430,24 @@ class DecisionSignalOutcomeService:
         dominant_quality = self._dominant_data_quality_level(rows)
 
         adjustment = "observe"
+        directional_completed = int(aggregate["directional_completed"])
+        directional_hit_rate_pct = aggregate["directional_hit_rate_pct"]
+        range_completed = int(aggregate["range_completed"])
         if sample_size == 0:
             notes = "no decision-signal outcome data for this stock yet"
-        elif completed < MIN_REVIEW_SAMPLE_SIZE:
-            notes = (
-                f"insufficient sample: {completed} completed outcomes "
-                f"(< {MIN_REVIEW_SAMPLE_SIZE}); observation only"
+        elif directional_completed < MIN_REVIEW_SAMPLE_SIZE:
+            # 校准只看方向性样本。区间样本（「观望」）再多也不能支撑置信度
+            # 调整 —— 否则一个从不下方向判断的模型会因为"区间说对了"被上调。
+            detail = (
+                f"insufficient directional sample: {directional_completed} directional "
+                f"outcomes (< {MIN_REVIEW_SAMPLE_SIZE})"
             )
+            if range_completed:
+                detail += (
+                    f"; {range_completed} range outcomes recorded separately"
+                    f" (hit_rate={aggregate['range_hit_rate_pct']}%)"
+                )
+            notes = f"{detail}; observation only"
         elif unable_rate_pct > REVIEW_MAX_UNABLE_RATE_PCT:
             notes = (
                 f"high unable rate: {unable_rate_pct}% of outcomes could not be "
@@ -439,15 +456,17 @@ class DecisionSignalOutcomeService:
         elif dominant_quality in REVIEW_WEAK_DATA_QUALITY_LEVELS:
             notes = f"weak data quality (dominant level: {dominant_quality}); observation only"
         else:
-            hit_rate_pct = aggregate["hit_rate_pct"]
-            if hit_rate_pct is not None and hit_rate_pct >= REVIEW_UPGRADE_HIT_RATE_PCT:
+            if directional_hit_rate_pct >= REVIEW_UPGRADE_HIT_RATE_PCT:
                 adjustment = "upgrade"
-            elif hit_rate_pct is not None and hit_rate_pct <= REVIEW_DOWNGRADE_HIT_RATE_PCT:
+            elif directional_hit_rate_pct <= REVIEW_DOWNGRADE_HIT_RATE_PCT:
                 adjustment = "downgrade"
             else:
                 adjustment = "neutral"
             notes = (
-                f"{completed} completed outcomes, hit_rate={hit_rate_pct}%; "
+                f"{directional_completed} directional outcomes, "
+                f"directional_hit_rate={directional_hit_rate_pct}%; "
+                f"{range_completed} range outcomes, range_hit_rate="
+                f"{aggregate['range_hit_rate_pct']}%; "
                 "observation only, not a trading signal"
             )
 
@@ -457,6 +476,10 @@ class DecisionSignalOutcomeService:
             "sample_size": sample_size,
             "completed": completed,
             "hit_rate_pct": aggregate["hit_rate_pct"],
+            "directional_completed": directional_completed,
+            "directional_hit_rate_pct": directional_hit_rate_pct,
+            "range_completed": range_completed,
+            "range_hit_rate_pct": aggregate["range_hit_rate_pct"],
             "avg_return_pct": aggregate["avg_stock_return_pct"],
             "common_miss_reasons": self._common_miss_reasons(rows, aggregate),
             "confidence_adjustment": adjustment,
@@ -622,6 +645,15 @@ class DecisionSignalOutcomeService:
             return "not_down"
         if action in {"reduce", "sell", "avoid"}:
             return "not_up"
+        # 「观望」是一条区间预期，不是弃权：权威刻度把 40-59 定义为观望，
+        # 且 BacktestEngine.infer_direction_expected("观望") 已经返回 "flat"，
+        # docs/full-guide.md 也把「观望/等待/wait」记为「价格在中性带内」。
+        # 在此之前 watch 映射为 None，导致最常见的 action 永远无法被评分，
+        # 整个验证闭环因此从未闭合。
+        #
+        # 「alert」仍返回 None —— 它是真正的提醒，没有方向语义。
+        if action == "watch":
+            return "flat"
         return None
 
     def _snapshot_fields(self, signal: DecisionSignalRecord, horizon: str) -> Dict[str, Any]:
@@ -1010,6 +1042,24 @@ class DecisionSignalOutcomeService:
             if row.stock_return_pct is not None
         ]
         unable_reasons = Counter(row.unable_reason or "unknown" for row in unable)
+
+        # 按预期类型分开统计：方向性样本用于校准，区间样本单独报告。
+        # 混在一起会让"从不表态"看起来比"敢表态"更准（见 DIRECTIONAL_EXPECTATIONS 注释）。
+        directional = [
+            row for row in completed
+            if (row.direction_expected or "") in DIRECTIONAL_EXPECTATIONS
+        ]
+        ranged = [
+            row for row in completed
+            if (row.direction_expected or "") in RANGE_EXPECTATIONS
+        ]
+        directional_hit = sum(1 for row in directional if row.outcome == "hit")
+        directional_miss = sum(1 for row in directional if row.outcome == "miss")
+        directional_denominator = directional_hit + directional_miss
+        range_hit = sum(1 for row in ranged if row.outcome == "hit")
+        range_miss = sum(1 for row in ranged if row.outcome == "miss")
+        range_denominator = range_hit + range_miss
+
         return {
             "total": total,
             "completed": len(completed),
@@ -1020,4 +1070,20 @@ class DecisionSignalOutcomeService:
             "hit_rate_pct": round(hit / denominator * 100, 2) if denominator else None,
             "avg_stock_return_pct": round(sum(returns) / len(returns), 4) if returns else None,
             "unable_reasons": dict(sorted(unable_reasons.items())),
+            "directional_completed": directional_denominator,
+            "directional_hit": directional_hit,
+            "directional_miss": directional_miss,
+            "directional_hit_rate_pct": (
+                round(directional_hit / directional_denominator * 100, 2)
+                if directional_denominator
+                else None
+            ),
+            "range_completed": range_denominator,
+            "range_hit": range_hit,
+            "range_miss": range_miss,
+            "range_hit_rate_pct": (
+                round(range_hit / range_denominator * 100, 2)
+                if range_denominator
+                else None
+            ),
         }

@@ -196,7 +196,11 @@ def test_get_stock_review_insufficient_sample_stays_observe(isolated_db) -> None
     assert review["completed"] == MIN_REVIEW_SAMPLE_SIZE - 1
     assert review["hit_rate_pct"] == 100.0
     assert review["confidence_adjustment"] == "observe"
-    assert "insufficient sample" in review["notes"]
+    # 门槛现在明确针对【方向性】样本：区间（观望）样本再多也不能支撑校准，
+    # 否则一个从不下方向判断的模型会因为区间说对了而被上调置信度。
+    assert "insufficient directional sample" in review["notes"]
+    assert review["directional_completed"] == MIN_REVIEW_SAMPLE_SIZE - 1
+    assert review["range_completed"] == 0
 
 
 def test_get_stock_review_high_unable_rate_stays_observe(isolated_db) -> None:
