@@ -12,6 +12,7 @@ API v1 路由聚合
 from fastapi import APIRouter
 
 from api.v1.endpoints import (
+    data_inventory,
     agent,
     alerts,
     screening,
@@ -110,6 +111,13 @@ router.include_router(
     prefix="/data",
     tags=["Data"]
 )
+
+router.include_router(
+    data_inventory.router,
+    prefix="/data",
+    tags=["Data"],
+)
+
 
 router.include_router(
     intelligence.router,
