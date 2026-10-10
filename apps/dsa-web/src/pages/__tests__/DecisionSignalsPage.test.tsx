@@ -6,6 +6,7 @@ import {
   getDecisionSignalReassessBlockedError,
 } from '../../api/decisionSignals';
 import { historyApi } from '../../api/history';
+import { stockProfileApi } from '../../api/stockProfile';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import type { StockBarResponse } from '../../types/analysis';
 import type {
@@ -17,6 +18,7 @@ import type {
   DecisionSignalReassessResponse,
 } from '../../types/decisionSignals';
 import type { StockIndexItem } from '../../types/stockIndex';
+import type { StockProfileResponse } from '../../types/stockProfile';
 import DecisionSignalsPage from '../DecisionSignalsPage';
 
 let stockIndexState: {
@@ -44,6 +46,12 @@ vi.mock('../../api/decisionSignals', () => ({
 vi.mock('../../api/history', () => ({
   historyApi: {
     getStockBarList: vi.fn(),
+  },
+}));
+
+vi.mock('../../api/stockProfile', () => ({
+  stockProfileApi: {
+    getProfile: vi.fn(),
   },
 }));
 
@@ -423,6 +431,8 @@ beforeEach(() => {
   vi.mocked(decisionSignalsApi.updateStatus).mockResolvedValue({ ...signal, status: 'invalidated' });
   vi.mocked(decisionSignalsApi.reassess).mockResolvedValue(reassessResponse);
   vi.mocked(getDecisionSignalReassessBlockedError).mockReturnValue(null);
+  // 个股信息面板不属于本文件覆盖范围：让它一直挂起，避免其加载文案/告警进入既有断言。
+  vi.mocked(stockProfileApi.getProfile).mockReturnValue(new Promise<StockProfileResponse>(() => {}));
 });
 
 describe('DecisionSignalsPage', () => {

@@ -25,6 +25,7 @@ import {
 import { DecisionSignalProfileCalibration } from '../components/decision-signals/DecisionSignalProfileCalibration';
 import { DecisionSignalTimeline } from '../components/decision-signals/DecisionSignalTimeline';
 import { StockAutocomplete } from '../components/StockAutocomplete';
+import { StockProfilePanel } from '../components/stock-profile/StockProfilePanel';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { useStockIndex } from '../hooks/useStockIndex';
 import type { UiTextKey } from '../i18n/uiText';
@@ -1285,6 +1286,16 @@ const DecisionSignalsPage: React.FC = () => {
             <p className="mt-4 text-sm text-secondary-text">{t('decisionSignals.stockContextNoCandidates')}</p>
           ) : null}
         </Card>
+
+        {/* 用户在这个页面输入股票的本意是「查这只票」，所以紧贴输入框下方立刻给出这只
+            股票的画像；否则一只从未分析过的股票（如 002567 唐人神）会让整页看不到任何
+            与输入相关的内容。该面板是纯增量，不改动下方任何既有区块。 */}
+        {activeStockContext ? (
+          <StockProfilePanel
+            stockCode={activeStockContext.code}
+            stockName={activeStockContext.name}
+          />
+        ) : null}
 
         <Card padding="md">
           <form className="grid gap-3 md:grid-cols-3 xl:grid-cols-7" onSubmit={handleApplyFilters}>
