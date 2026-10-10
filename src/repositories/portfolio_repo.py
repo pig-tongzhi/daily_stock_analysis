@@ -30,6 +30,26 @@ from src.storage import (
 logger = logging.getLogger(__name__)
 
 
+def _canonical_id_for(symbol: Any) -> Optional[str]:
+    """把 symbol 归一到 canonical_id，用于跨表 join。
+
+    持仓重估是「先 DELETE 再 re-INSERT」，如果不在这里显式写入，canonical_id
+    会随每次重估被清空（实测发生过：迁移填好的值在下一次重估后变回 NULL），
+    于是持仓与资讯/K线/档案又 join 不上。写入时算一次，比事后补更可靠。
+    """
+    raw = str(symbol or "").strip()
+    if not raw:
+        return None
+    try:
+        from src.storage import DatabaseManager
+
+        return DatabaseManager.get_instance()._derive_canonical_id(raw)
+    except Exception:
+        logger.debug("[Portfolio] 无法为 %r 推导 canonical_id", raw, exc_info=True)
+        return None
+
+
+
 class DuplicateTradeUidError(Exception):
     """Raised when trade_uid conflicts with existing record in one account."""
 
@@ -905,6 +925,8 @@ class PortfolioRepository:
                         market_value_base=float(item["market_value_base"]),
                         unrealized_pnl_base=float(item["unrealized_pnl_base"]),
                         valuation_currency=valuation_currency,
+                        # 重估是「先 DELETE 再 re-INSERT」，不在这里写就会随每次重估丢
+                        canonical_id=_canonical_id_for(item["symbol"]),
                     )
                 )
 
@@ -914,6 +936,7 @@ class PortfolioRepository:
                         account_id=account_id,
                         cost_method=cost_method,
                         symbol=lot["symbol"],
+                        canonical_id=_canonical_id_for(lot["symbol"]),
                         market=lot["market"],
                         currency=lot["currency"],
                         open_date=lot["open_date"],
@@ -1090,6 +1113,8 @@ class PortfolioRepository:
                         market_value_base=float(item["market_value_base"]),
                         unrealized_pnl_base=float(item["unrealized_pnl_base"]),
                         valuation_currency=valuation_currency,
+                        # 重估是「先 DELETE 再 re-INSERT」，不在这里写就会随每次重估丢
+                        canonical_id=_canonical_id_for(item["symbol"]),
                     )
                 )
 
@@ -1099,6 +1124,7 @@ class PortfolioRepository:
                         account_id=account_id,
                         cost_method=cost_method,
                         symbol=lot["symbol"],
+                        canonical_id=_canonical_id_for(lot["symbol"]),
                         market=lot["market"],
                         currency=lot["currency"],
                         open_date=lot["open_date"],

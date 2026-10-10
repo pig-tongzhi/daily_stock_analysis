@@ -184,6 +184,9 @@ class NewsIntel(Base):
     存储搜索到的新闻情报条目，用于后续分析与查询
     """
     __tablename__ = 'news_intel'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
@@ -254,6 +257,9 @@ class IntelligenceItem(Base):
     """沉淀后的资讯 / 情报条目。"""
 
     __tablename__ = 'intelligence_items'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     source_id = Column(Integer, ForeignKey('intelligence_sources.id', ondelete='SET NULL'), nullable=True, index=True)
@@ -291,6 +297,9 @@ class FundamentalSnapshot(Base):
     仅用于写入，主链路不依赖读取该表，便于后续回测/画像扩展。
     """
     __tablename__ = 'fundamental_snapshot'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     query_id = Column(String(64), nullable=False, index=True)
@@ -342,6 +351,9 @@ class AnalysisHistory(Base):
     保存每次分析结果，支持按 query_id/股票代码检索
     """
     __tablename__ = 'analysis_history'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
@@ -546,6 +558,9 @@ class PortfolioTrade(Base):
     """Executed trade events used as the source of truth for replay."""
 
     __tablename__ = 'portfolio_trades'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
@@ -615,6 +630,9 @@ class PortfolioPosition(Base):
     """Latest replayed position snapshot for each symbol in one account."""
 
     __tablename__ = 'portfolio_positions'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
@@ -647,6 +665,9 @@ class PortfolioPositionLot(Base):
     """Lot-level remaining quantities used by FIFO replay."""
 
     __tablename__ = 'portfolio_position_lots'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     account_id = Column(Integer, ForeignKey('portfolio_accounts.id'), nullable=False, index=True)
@@ -1032,6 +1053,9 @@ class DecisionSignalRecord(Base):
     """Persisted AI decision signal asset for Issue #1390 P1."""
 
     __tablename__ = 'decision_signals'
+    # 跨表 join 的权威股票键（sh600519 / sz002567）。
+    # 读取路径仍用 code/symbol（AC 4），这一列只用于关联。
+    canonical_id = Column(String(32), nullable=True)
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     stock_code = Column(String(16), nullable=False, index=True)
