@@ -1105,3 +1105,46 @@ class RuntimeSchedulerServiceTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_outcome_auto_run_task_is_opt_in_and_validates_interval() -> None:
+    """到期验证的调度任务必须默认关闭，且对非法间隔兜底。
+
+    这个任务此前根本不存在机制 —— 到期验证只有手动 API 入口，从未运行过，
+    于是 decision_signal_outcomes 长期为空，反馈闭环始终惰性。
+    """
+    from src.config import get_config
+    from src.services.runtime_scheduler import (
+        RuntimeSchedulerService,
+        _decision_signal_outcome_interval_seconds,
+    )
+
+    config = get_config()
+    service = RuntimeSchedulerService(owns_schedule=True)
+
+    config.decision_signal_outcome_auto_run_enabled = False
+    assert service._current_decision_signal_outcome_background_tasks(config) == []
+
+    # 必须经由聚合入口断言：只测 builder 会漏掉"接线被删"的情况。
+    assert all(
+        t["name"] != "decision_signal_outcome"
+        for t in service._current_background_tasks(config)
+    )
+
+    config.decision_signal_outcome_auto_run_enabled = True
+    tasks = service._current_decision_signal_outcome_background_tasks(config)
+    assert len(tasks) == 1
+    assert tasks[0]["name"] == "decision_signal_outcome"
+    assert tasks[0]["interval_seconds"] == 3600
+
+    # 聚合入口必须真的把它带上（否则任务永远不会被注册到调度器）
+    aggregated = {t["name"] for t in service._current_background_tasks(config)}
+    assert "decision_signal_outcome" in aggregated
+
+    # 非法间隔不得产生 0/负数周期（那会变成忙循环）
+    for bad in (0, -5, "x", None):
+        config.decision_signal_outcome_auto_run_interval_minutes = bad
+        assert _decision_signal_outcome_interval_seconds(config) == 3600
+
+    config.decision_signal_outcome_auto_run_interval_minutes = 15
+    assert _decision_signal_outcome_interval_seconds(config) == 900

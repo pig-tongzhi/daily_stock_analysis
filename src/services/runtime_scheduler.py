@@ -235,6 +235,65 @@ def build_agent_event_monitor_background_tasks(
     }]
 
 
+def _decision_signal_outcome_interval_seconds(config: Config) -> int:
+    interval_minutes = getattr(config, "decision_signal_outcome_auto_run_interval_minutes", 60)
+    try:
+        minutes = int(interval_minutes)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid DECISION_SIGNAL_OUTCOME_AUTO_RUN_INTERVAL_MINUTES=%r; use fallback 60",
+            interval_minutes,
+        )
+        minutes = 60
+    if minutes <= 0:
+        minutes = 60
+    return minutes * 60
+
+
+def build_decision_signal_outcome_background_tasks(
+    config: Config,
+    *,
+    config_provider: Callable[[], Config],
+) -> List[Dict[str, Any]]:
+    """Build the periodic decision-signal outcome evaluation task.
+
+    到期验证必须自动运行。此前它只有一个手动 API 入口，结果是从未运行过 ——
+    decision_signal_outcomes 长期为 0 行，整个反馈闭环（命中率 → 置信度校准 →
+    影响下一次分析）始终是惰性的。
+    """
+    if not getattr(config, "decision_signal_outcome_auto_run_enabled", False):
+        return []
+
+    interval_seconds = _decision_signal_outcome_interval_seconds(config)
+
+    def outcome_task() -> None:
+        try:
+            from src.services.decision_signal_outcome_service import (
+                DecisionSignalOutcomeService,
+            )
+
+            result = DecisionSignalOutcomeService().run_outcomes()
+            evaluated = int(result.get("evaluated") or 0)
+            if evaluated:
+                logger.info(
+                    "[DecisionSignalOutcome] evaluated=%s created=%s updated=%s unable=%s",
+                    evaluated,
+                    result.get("created"),
+                    result.get("updated"),
+                    result.get("skipped"),
+                )
+        except Exception:
+            # 单次失败不能让后台任务永久死掉；下一轮继续。
+            logger.exception("[DecisionSignalOutcome] scheduled run failed")
+
+    return [{
+        "task": outcome_task,
+        "interval_seconds": interval_seconds,
+        "run_immediately": True,
+        "name": "decision_signal_outcome",
+    }]
+
+
 class RuntimeSchedulerService:
     """Manage scheduled analysis inside the current API/Web/Desktop process."""
 
@@ -615,7 +674,44 @@ class RuntimeSchedulerService:
     def _current_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         if self._background_tasks_provider is not None:
             return self._background_tasks_provider(config)
-        return self._current_agent_event_monitor_background_tasks(config)
+        # 两个后台任务并列注册：事件监控与到期验证互不依赖，各自独立开关。
+        return [
+            *self._current_agent_event_monitor_background_tasks(config),
+            *self._current_decision_signal_outcome_background_tasks(config),
+        ]
+
+    def _current_decision_signal_outcome_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
+        name = "decision_signal_outcome"
+        if not getattr(config, "decision_signal_outcome_auto_run_enabled", False):
+            self._background_task_cache.pop(name, None)
+            self._background_task_registered_names.discard(name)
+            return []
+
+        cached = self._background_task_cache.get(name)
+        if cached is None:
+            entries = build_decision_signal_outcome_background_tasks(
+                config,
+                config_provider=self._reload_config,
+            )
+            if not entries:
+                self._background_task_cache.pop(name, None)
+                self._background_task_registered_names.discard(name)
+                return []
+            cached = dict(entries[0])
+            cached["name"] = name
+            self._background_task_cache[name] = cached
+            interval_seconds = int(cached["interval_seconds"])
+        else:
+            interval_seconds = _decision_signal_outcome_interval_seconds(config)
+
+        run_immediately = bool(cached.get("run_immediately", False))
+        self._background_task_registered_names.add(name)
+        return [{
+            "task": cached["task"],
+            "interval_seconds": interval_seconds,
+            "run_immediately": run_immediately,
+            "name": name,
+        }]
 
     def _current_agent_event_monitor_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "agent_event_monitor"

@@ -1048,6 +1048,10 @@ class Config:
     agent_event_monitor_enabled: bool = False  # Enable periodic event-driven alert checks in schedule mode
     agent_event_monitor_interval_minutes: int = 5  # Polling interval for event monitor background checks
     agent_event_alert_rules_json: str = ""  # JSON array of serialized EventMonitor rules
+    # 到期验证的后台自动运行。此前它只有手动 API 入口，从未运行过，
+    # 导致整个反馈闭环（命中率 → 置信度校准 → 影响下一次分析）长期惰性。
+    decision_signal_outcome_auto_run_enabled: bool = False
+    decision_signal_outcome_auto_run_interval_minutes: int = 60
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -2043,6 +2047,15 @@ class Config:
                 minimum=1,
             ),
             agent_event_alert_rules_json=os.getenv('AGENT_EVENT_ALERT_RULES_JSON', ''),
+            decision_signal_outcome_auto_run_enabled=os.getenv(
+                'DECISION_SIGNAL_OUTCOME_AUTO_RUN_ENABLED', 'false'
+            ).lower() == 'true',
+            decision_signal_outcome_auto_run_interval_minutes=parse_env_int(
+                os.getenv('DECISION_SIGNAL_OUTCOME_AUTO_RUN_INTERVAL_MINUTES'),
+                60,
+                field_name='DECISION_SIGNAL_OUTCOME_AUTO_RUN_INTERVAL_MINUTES',
+                minimum=1,
+            ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
             feishu_webhook_url=os.getenv('FEISHU_WEBHOOK_URL'),
             feishu_webhook_secret=os.getenv('FEISHU_WEBHOOK_SECRET'),
