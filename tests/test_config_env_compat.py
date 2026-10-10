@@ -294,6 +294,15 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
     def test_load_from_env_uses_stable_fundamental_timeout_defaults(
         self, _mock_parse_litellm_yaml, _mock_setup_env
     ):
+        """默认值仍须"稳定"，但 2026-10 起有意放宽。
+
+        原值 8.0 是实测不成立的：stock_financial_abstract 单独就要 5.5 秒（多页
+        财报），而 8 秒预算还要与估值等步骤分摊 —— 结果是 growth / earnings /
+        institution / dragon_tiger / boards 全部超时，快照里只剩估值一个 ok。
+        放宽到 stage 30 / fetch 20 后同一批接口全部成功（真跑 600519 验证：
+        8 个维度里 5 个 ok、2 个 partial）。这个测试的作用是防止默认值被随手
+        改动，因此改动必须连带把原因写在这里，而不是把断言悄悄放宽。
+        """
         with patch.dict(
             os.environ,
             {
@@ -303,8 +312,8 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         ):
             config = Config._load_from_env()
 
-        self.assertEqual(config.fundamental_stage_timeout_seconds, 8.0)
-        self.assertEqual(config.fundamental_fetch_timeout_seconds, 8.0)
+        self.assertEqual(config.fundamental_stage_timeout_seconds, 30.0)
+        self.assertEqual(config.fundamental_fetch_timeout_seconds, 20.0)
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
