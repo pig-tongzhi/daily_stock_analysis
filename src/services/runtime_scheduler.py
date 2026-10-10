@@ -304,6 +304,115 @@ def build_decision_signal_outcome_background_tasks(
     }]
 
 
+def _stock_daily_refresh_interval_seconds(config: Config) -> int:
+    interval_minutes = getattr(config, "stock_daily_refresh_interval_minutes", 60)
+    try:
+        minutes = int(interval_minutes)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid STOCK_DAILY_REFRESH_INTERVAL_MINUTES=%r; use fallback 60",
+            interval_minutes,
+        )
+        minutes = 60
+    return minutes * 60 if minutes > 0 else 3600
+
+
+def _tracked_daily_codes(config: Config) -> List[str]:
+    """需要保持行情新鲜的代码：自选股 + 判断里出现过的标的。
+
+    判断里出现过的代码同样必需 —— 588200 只出现在 decision_signals 里、不在
+    自选股中，缺少它的行情的直接后果就是那条唯一的买入判断永远无法复盘。
+    """
+    codes: List[str] = []
+    # stock_list 由配置解析而来，形态可能是 list 也可能是逗号分隔字符串。
+    # 用 str() 粗暴转换会把 ['600559', ...] 的 repr 当成代码 —— 必须按类型处理。
+    raw_list = getattr(config, "stock_list", None)
+    if isinstance(raw_list, (list, tuple, set)):
+        candidates = [str(item) for item in raw_list]
+    else:
+        candidates = str(raw_list or "").replace("，", ",").split(",")
+    for item in candidates:
+        item = item.strip().strip("'\"")
+        if item:
+            codes.append(item)
+    try:
+        from src.repositories.decision_signal_repo import DecisionSignalRepository
+
+        # list() 返回 (records, total)，不是列表 —— 直接迭代会拿到元组本身。
+        records, _total = DecisionSignalRepository().list(page=1, page_size=200)
+        for row in records:
+            code = str(getattr(row, "stock_code", "") or "").strip()
+            if code:
+                codes.append(code)
+    except Exception:
+        # 用 warning 而不是 debug：这个查询失败会漏掉"只出现在 decision_signals 里"
+        # 的标的（例如 588200），而漏掉的后果正是那条判断永远无法复盘。
+        # 静默吞异常本身就是本阶段在治的病，不能自己再犯一次。
+        logger.warning(
+            "[StockDailyRefresh] 读取 decision_signals 代码失败；本次将只刷新自选股",
+            exc_info=True,
+        )
+    return list(dict.fromkeys(codes))
+
+
+def build_stock_daily_refresh_background_tasks(
+    config: Config,
+    *,
+    config_provider: Callable[[], Config],
+) -> List[Dict[str, Any]]:
+    """Build the periodic local daily-bar refresh task.
+
+    行情此前只在跑分析时顺带更新，于是它会在没人分析时静默停摆 —— 本次发现
+    stock_daily 停在 2026-09-30，而 10-08/10-09 早已过去。到期验证依赖 K 线，
+    所以行情新鲜度不能依附于分析频率。
+    """
+    if not getattr(config, "stock_daily_refresh_enabled", False):
+        return []
+
+    interval_seconds = _stock_daily_refresh_interval_seconds(config)
+
+    def refresh_task() -> None:
+        try:
+            from data_provider.base import DataFetcherManager
+            from src.services.stock_code_utils import resolve_daily_stock_identity
+            from src.storage import DatabaseManager
+
+            current = config_provider() if callable(config_provider) else config
+            codes = _tracked_daily_codes(current)
+            if not codes:
+                return
+            db = DatabaseManager.get_instance()
+            manager = DataFetcherManager()
+            refreshed = failed = 0
+            for raw in codes:
+                identity = resolve_daily_stock_identity(raw)
+                stored = identity.code_candidates[0] if identity is not None else raw
+                try:
+                    df, source = manager.get_daily_data(stored, days=30)
+                    if df is None or getattr(df, "empty", True):
+                        continue
+                    db.save_daily_data(df, stored, source)
+                    refreshed += 1
+                except Exception:
+                    failed += 1
+            logger.info(
+                "[StockDailyRefresh] codes=%s refreshed=%s failed=%s",
+                len(codes),
+                refreshed,
+                failed,
+            )
+        except Exception:
+            # 单次失败不能让后台任务永久死掉；下一轮继续。
+            logger.exception("[StockDailyRefresh] scheduled run failed")
+
+    return [{
+        "task": refresh_task,
+        "interval_seconds": interval_seconds,
+        "run_immediately": False,
+        "name": "stock_daily_refresh",
+    }]
+
+
 class RuntimeSchedulerService:
     """Manage scheduled analysis inside the current API/Web/Desktop process."""
 
@@ -684,11 +793,45 @@ class RuntimeSchedulerService:
     def _current_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         if self._background_tasks_provider is not None:
             return self._background_tasks_provider(config)
-        # 两个后台任务并列注册：事件监控与到期验证互不依赖，各自独立开关。
+        # 三个后台任务并列注册：事件监控、到期验证、行情刷新互不依赖，各自独立开关。
         return [
             *self._current_agent_event_monitor_background_tasks(config),
             *self._current_decision_signal_outcome_background_tasks(config),
+            *self._current_stock_daily_refresh_background_tasks(config),
         ]
+
+    def _current_stock_daily_refresh_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
+        name = "stock_daily_refresh"
+        if not getattr(config, "stock_daily_refresh_enabled", False):
+            self._background_task_cache.pop(name, None)
+            self._background_task_registered_names.discard(name)
+            return []
+
+        cached = self._background_task_cache.get(name)
+        if cached is None:
+            entries = build_stock_daily_refresh_background_tasks(
+                config,
+                config_provider=self._reload_config,
+            )
+            if not entries:
+                self._background_task_cache.pop(name, None)
+                self._background_task_registered_names.discard(name)
+                return []
+            cached = dict(entries[0])
+            cached["name"] = name
+            self._background_task_cache[name] = cached
+            interval_seconds = int(cached["interval_seconds"])
+        else:
+            interval_seconds = _stock_daily_refresh_interval_seconds(config)
+
+        run_immediately = bool(cached.get("run_immediately", False))
+        self._background_task_registered_names.add(name)
+        return [{
+            "task": cached["task"],
+            "interval_seconds": interval_seconds,
+            "run_immediately": run_immediately,
+            "name": name,
+        }]
 
     def _current_decision_signal_outcome_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "decision_signal_outcome"

@@ -1176,3 +1176,49 @@ def test_outcome_task_logs_reason_breakdown_even_when_nothing_new(caplog) -> Non
     # 无论是否有新增，都必须带上 completed/unable 与原因分布
     for token in ("completed=", "unable=", "directional=", "range=", "unable_reasons="):
         assert token in line, f"缺少 {token}: {line}"
+
+
+def test_stock_daily_refresh_is_opt_in_and_covers_signal_only_codes() -> None:
+    """行情刷新任务必须默认关闭，且覆盖只在 decision_signals 出现的标的。
+
+    stock_daily 此前只在跑分析时顺带更新，于是静默停在 2026-09-30，而到期验证
+    依赖 K 线。588200 只出现在判断里、不在自选股中 —— 漏掉它，那条唯一的买入
+    判断就永远无法复盘。
+    """
+    from src.config import get_config
+    from src.services.runtime_scheduler import (
+        RuntimeSchedulerService,
+        _stock_daily_refresh_interval_seconds,
+        _tracked_daily_codes,
+    )
+
+    config = get_config()
+    service = RuntimeSchedulerService(owns_schedule=True)
+
+    config.stock_daily_refresh_enabled = False
+    assert service._current_stock_daily_refresh_background_tasks(config) == []
+    assert all(
+        t["name"] != "stock_daily_refresh"
+        for t in service._current_background_tasks(config)
+    )
+
+    config.stock_daily_refresh_enabled = True
+    tasks = service._current_stock_daily_refresh_background_tasks(config)
+    assert len(tasks) == 1
+    assert tasks[0]["name"] == "stock_daily_refresh"
+    assert tasks[0]["interval_seconds"] == 3600
+    assert "stock_daily_refresh" in {
+        t["name"] for t in service._current_background_tasks(config)
+    }
+
+    # 非法间隔不得变成忙循环
+    for bad in (0, -1, "x"):
+        config.stock_daily_refresh_interval_minutes = bad
+        assert _stock_daily_refresh_interval_seconds(config) == 3600
+
+    # 代码清单必须干净，且包含只在判断里出现的标的
+    codes = _tracked_daily_codes(config)
+    assert codes, "应至少包含自选股"
+    assert not any(("[" in c or "'" in c or '"' in c) for c in codes), codes
+    # stock_list 是列表形态，绝不能被 str() 成 repr
+    assert all("," not in c for c in codes)

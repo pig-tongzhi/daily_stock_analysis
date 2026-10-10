@@ -1052,6 +1052,10 @@ class Config:
     # 导致整个反馈闭环（命中率 → 置信度校准 → 影响下一次分析）长期惰性。
     decision_signal_outcome_auto_run_enabled: bool = False
     decision_signal_outcome_auto_run_interval_minutes: int = 60
+    # 本地行情（stock_daily）的独立刷新。此前只在跑分析时顺带更新，
+    # 于是没人在分析时它静默停摆，K 线过期会让到期验证无法完成。
+    stock_daily_refresh_enabled: bool = False
+    stock_daily_refresh_interval_minutes: int = 60
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -2054,6 +2058,15 @@ class Config:
                 os.getenv('DECISION_SIGNAL_OUTCOME_AUTO_RUN_INTERVAL_MINUTES'),
                 60,
                 field_name='DECISION_SIGNAL_OUTCOME_AUTO_RUN_INTERVAL_MINUTES',
+                minimum=1,
+            ),
+            stock_daily_refresh_enabled=os.getenv(
+                'STOCK_DAILY_REFRESH_ENABLED', 'false'
+            ).lower() == 'true',
+            stock_daily_refresh_interval_minutes=parse_env_int(
+                os.getenv('STOCK_DAILY_REFRESH_INTERVAL_MINUTES'),
+                60,
+                field_name='STOCK_DAILY_REFRESH_INTERVAL_MINUTES',
                 minimum=1,
             ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
