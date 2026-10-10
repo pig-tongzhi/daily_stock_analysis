@@ -231,6 +231,12 @@ class DecisionSignalOutcomeStatsResponse(BaseModel):
     hit_rate_pct: Optional[float] = None
     avg_stock_return_pct: Optional[float] = None
     unable_reasons: Dict[str, int] = Field(default_factory=dict)
+    # 方向性样本与区间样本分开计数：区间（「观望」）的命中门槛天然更容易达到，
+    # 混在一起会让"从不下方向判断"看起来更准。
+    directional_completed: int = Field(0, ge=0)
+    directional_hit_rate_pct: Optional[float] = None
+    range_completed: int = Field(0, ge=0)
+    range_hit_rate_pct: Optional[float] = None
     breakdowns: Dict[str, List[DecisionSignalOutcomeStatsBucket]] = Field(default_factory=dict)
     profile_calibration: DecisionSignalProfileCalibration
 
@@ -249,6 +255,11 @@ class DecisionSignalReviewMemory(BaseModel):
     sample_size: int = Field(0, ge=0)
     completed: int = Field(0, ge=0)
     hit_rate_pct: Optional[float] = None
+    # 校准只依据方向性样本；区间成绩单独报告，避免奖励"从不表态"。
+    directional_completed: int = Field(0, ge=0)
+    directional_hit_rate_pct: Optional[float] = None
+    range_completed: int = Field(0, ge=0)
+    range_hit_rate_pct: Optional[float] = None
     avg_return_pct: Optional[float] = None
     common_miss_reasons: List[str] = Field(default_factory=list)
     confidence_adjustment: DecisionSignalConfidenceAdjustment = "observe"
