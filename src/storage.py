@@ -2528,6 +2528,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                         record = NewsIntel(
                             code=code,
                             name=name,
+                            # 写入时就归一，否则新抓到的新闻 join 不上标的
+                            canonical_id=self._derive_canonical_id(code),
                             dimension=dimension,
                             query=query,
                             provider=response.provider,
@@ -2909,6 +2911,8 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
                 history = AnalysisHistory(
                     query_id=query_id,
                     code=result.code,
+                    # 写入时就归一，否则新记录 join 不上资讯/K线/档案
+                    canonical_id=self._derive_canonical_id(result.code),
                     name=result.name,
                     report_type=report_type,
                     sentiment_score=result.sentiment_score,

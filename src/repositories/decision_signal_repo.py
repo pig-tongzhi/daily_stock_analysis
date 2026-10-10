@@ -59,6 +59,27 @@ class DecisionSignalRepository:
     def __init__(self, db_manager: Optional[DatabaseManager] = None):
         self.db = db_manager or DatabaseManager.get_instance()
 
+    def _with_canonical_id(self, fields: Dict[str, Any]) -> Dict[str, Any]:
+        """确保 fields 带上 canonical_id。
+
+        两处 DecisionSignalRecord(**fields) 都经过这里，所以只补一次即可。
+        写入时不归一的话，新产生的建议 join 不上资讯/K线/档案 —— 而这几张表
+        正是靠 canonical_id 关联的。
+        """
+        if fields.get("canonical_id"):
+            return fields
+        code = fields.get("stock_code")
+        if not code:
+            return fields
+        try:
+            cid = self.db._derive_canonical_id(str(code))
+        except Exception:
+            return fields
+        if cid:
+            fields = dict(fields)
+            fields["canonical_id"] = cid
+        return fields
+
     def create(self, fields: Dict[str, Any]) -> DecisionSignalRecord:
         fields = self._normalize_datetime_fields(fields)
         with self.db.get_session() as session:
@@ -139,7 +160,7 @@ class DecisionSignalRepository:
                     invalidation_reference_at=relaxed_existing.created_at,
                 )
 
-            row = DecisionSignalRecord(**fields)
+            row = DecisionSignalRecord(**self._with_canonical_id(fields))
             session.add(row)
             session.commit()
             session.refresh(row)

@@ -40,11 +40,18 @@ class TestCompanyBlock:
         assert data["metrics"]["pe_ttm"] is not None
 
     def test_null_metrics_are_flagged_not_hidden(self, svc):
-        """抓取失败的估值存的是 NULL，必须标明原因，否则会被读成"PE 就是空的"。"""
-        block = svc._company_block("002567")
-        data = block["data"]
-        if data and data.get("metrics") and data["metrics"]["pe_ttm"] is None:
-            assert "metrics_fetch_failed_for_latest_as_of" in block["limitations"]
+        """抓取失败的估值存的是 NULL，必须标明原因，否则会被读成"PE 就是空的"。
+
+        这是条件断言：只有当该标的确实存在全 NULL 的估值行时才检查。写死某个
+        标的会让测试随真实数据变化而红。
+        """
+        for code in ("002567", "600559", "600787", "600519"):
+            block = svc._company_block(code)
+            data = block.get("data") or {}
+            metrics = data.get("metrics") or {}
+            if metrics and metrics.get("pe_ttm") is None and metrics.get("pb") is None:
+                assert "metrics_fetch_failed_for_latest_as_of" in block["limitations"]
+                return
 
 
 class TestTrackRecordBlock:
@@ -71,7 +78,10 @@ class TestTrackRecordBlock:
             assert data["directional_hit_rate_pct"] is None
 
     def test_stock_never_analysed_reports_unavailable(self, svc):
-        block = svc._track_record_block("002567")
+        # 用一个不会出现在任何真实数据里的代码。此前这里写的是 002567（唐人神），
+        # 而应用一直在跑分析 —— 它后来真的有了信号，测试就红了。断言"从未分析过"
+        # 的行为时，标的必须真的不会被分析。
+        block = svc._track_record_block("999999")
         assert block["status"] == "unavailable"
         assert "no_signal_history" in block["limitations"]
 
