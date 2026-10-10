@@ -596,7 +596,14 @@ def test_optional_block_failures_remain_partial_and_do_not_hide_monitor_data() -
     assert "latest_report_detail_unavailable" in payload["evidence_quality"]["limitations"]
 
 
-def test_all_dependency_failures_return_unavailable_profile_instead_of_raising() -> None:
+def test_all_dependency_failures_do_not_raise_and_report_each_block() -> None:
+    """联网依赖全挂时不得抛异常，且每个受影响的块都要如实报 unavailable。
+
+    company / track_record 这两块读本地库、不经过被注入的依赖，因此它们**不受**
+    这次故障影响 —— 网络挂了但本地有公司档案时，返回 partial 并逐块说明谁失败，
+    比整体 unavailable 更有用。这里断言的是"依赖对应的块确实失败"，而不是
+    "所有块都失败"；后者在引入本地库块之后已不再是正确契约。
+    """
     service, dependencies = _service()
     for dependency, method in (
         ("stock_service", "get_realtime_quote"),
@@ -611,8 +618,18 @@ def test_all_dependency_failures_return_unavailable_profile_instead_of_raising()
     payload = service.get_profile("600519")
 
     assert payload["market"] == "cn"
-    assert payload["evidence_quality"]["status"] == "unavailable"
-    assert set(payload["evidence_quality"]["blocks"].values()) == {"unavailable"}
+    blocks = payload["evidence_quality"]["blocks"]
+    for name in ("quote", "history", "research", "intelligence", "portfolio", "monitors"):
+        assert blocks[name] == "unavailable", f"{name} 依赖已注入失败，应为 unavailable"
+    # 本地库块只反映真实数据状态，不受注入故障影响
+    assert blocks["company"] in {"ok", "partial", "unavailable"}
+    assert blocks["track_record"] in {"ok", "partial", "unavailable"}
+    # 整体状态必须与块集合自洽
+    statuses = set(blocks.values())
+    if statuses == {"unavailable"}:
+        assert payload["evidence_quality"]["status"] == "unavailable"
+    else:
+        assert payload["evidence_quality"]["status"] == "partial"
 
 
 def _reset_auth_globals() -> None:

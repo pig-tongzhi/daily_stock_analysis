@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from data_provider.base import canonical_stock_code
 from src.analysis_context_pack_overview import extract_analysis_context_pack_overview
@@ -21,7 +24,13 @@ from src.utils.data_processing import (
     extract_market_structure_detail_field,
 )
 
-_BLOCK_NAMES = ("quote", "history", "research", "intelligence", "portfolio", "monitors")
+# 新块（company / track_record）沿用同一套 status 语义，但本地库读取用 ok
+# 而非联网块的 fresh。两者都算"数据齐备"，见 _evidence_quality。
+_BLOCK_NAMES = (
+    "quote", "history", "research", "intelligence", "portfolio", "monitors",
+    "company", "track_record",
+)
+_HEALTHY_STATUSES = frozenset({"fresh", "ok"})
 
 
 class InvalidStockProfileCode(ValueError):
@@ -56,6 +65,11 @@ class StockProfileService:
             "intelligence": self._intelligence_block(canonical_code, market=market),
             "portfolio": self._portfolio_block(canonical_code, market=market),
             "monitors": self._monitor_block(canonical_code, market=market),
+            # 下面两块是这个服务里仅有的纯本地库读取（不联网）：公司档案来自
+            # company_profile，命中率来自 decision_signals/outcomes。放在这里是为了
+            # 让「查一只票」一次拿到全部本地资产，而不是散在多处让调用方自己拼。
+            "company": self._company_block(canonical_code),
+            "track_record": self._track_record_block(canonical_code),
         }
         return {
             "requested_code": str(requested_code).strip(),
@@ -64,6 +78,226 @@ class StockProfileService:
             "as_of": datetime.now().astimezone().isoformat(),
             **blocks,
             "evidence_quality": self._evidence_quality(blocks),
+        }
+
+    @staticmethod
+    def _db_canonical_id(canonical_code: str) -> Optional[str]:
+        """接口层的 canonical_code（600519）→ 库里的 canonical_id（sh600519）。
+
+        两者不同形是历史原因：接口用裸码/大写，本地资产表统一用市场前缀小写。
+        复用 DatabaseManager._derive_canonical_id 而不是自己拼前缀 —— 它已经能
+        正确处理 000063 / 000063.SZ / SZ000063 / sh600519 等各种输入。
+        """
+        try:
+            from src.storage import DatabaseManager
+
+            return DatabaseManager.get_instance()._derive_canonical_id(canonical_code)
+        except Exception:
+            return None
+
+    def _company_block(self, code: str) -> Dict[str, Any]:
+        """公司档案（行业/地域/概念）+ 最新一期估值。纯本地库读取。"""
+        canonical_id = self._db_canonical_id(code)
+        if not canonical_id:
+            return self._unavailable("company_identity_unresolved")
+
+        try:
+            from src.storage import DatabaseManager
+
+            engine = DatabaseManager.get_instance()._engine
+            with engine.connect() as conn:
+                from sqlalchemy import text
+
+                profile = conn.execute(
+                    text(
+                        "SELECT name, market, industry_l1, industry_l2, industry_l3, "
+                        "region, concepts_json, updated_at FROM company_profile "
+                        "WHERE canonical_id = :cid"
+                    ),
+                    {"cid": canonical_id},
+                ).fetchone()
+
+                if profile is None:
+                    # 档案是按需/定时补的，没抓到的票落在这里是正常状态，不是故障。
+                    return {
+                        "status": "unavailable",
+                        "data": None,
+                        "limitations": ["no_company_profile"],
+                    }
+
+                metrics = conn.execute(
+                    text(
+                        "SELECT as_of, pe_ttm, pb, total_mv, circ_mv FROM company_metrics "
+                        "WHERE canonical_id = :cid ORDER BY as_of DESC LIMIT 1"
+                    ),
+                    {"cid": canonical_id},
+                ).fetchone()
+        except Exception as exc:
+            logger.warning("[StockProfile] company block failed: %s", exc, exc_info=True)
+            return self._unavailable("company_query_failed")
+
+        import json as _json
+
+        concepts: list = []
+        if profile[6]:
+            try:
+                concepts = _json.loads(profile[6])
+            except Exception:
+                concepts = []
+
+        data: Dict[str, Any] = {
+            "name": profile[0],
+            "market": profile[1],
+            "industry_l1": profile[2],
+            "industry_l2": profile[3],
+            "industry_l3": profile[4],
+            "region": profile[5],
+            "concepts": concepts,
+            "updated_at": str(profile[7]) if profile[7] else None,
+        }
+        limitations: list = []
+        if metrics:
+            data["metrics"] = {
+                "as_of": str(metrics[0]),
+                "pe_ttm": metrics[1],
+                "pb": metrics[2],
+                "total_mv": metrics[3],
+                "circ_mv": metrics[4],
+            }
+            # 估值抓取失败时存的是 NULL，而不是用后来的值回填 —— 看到 NULL 要说清楚，
+            # 否则调用方会以为「PE 是空的」，而实际是「那天没取到」。
+            if metrics[1] is None and metrics[2] is None:
+                limitations.append("metrics_fetch_failed_for_latest_as_of")
+        else:
+            limitations.append("no_company_metrics")
+        if not data.get("industry_l1"):
+            limitations.append("no_industry_classification")
+
+        return {
+            "status": "ok" if not limitations else "partial",
+            "data": data,
+            "limitations": limitations,
+        }
+
+    def _track_record_block(self, code: str) -> Dict[str, Any]:
+        """这只票自己的历史判断记录 —— 让 AI 知道自己过去在这儿准不准。
+
+        命中率是按股票的，不是全局的。全局 63% 掩盖不了「这只票 5 次全错」，
+        而那正是下一次判断最该知道的事。
+        """
+        canonical_id = self._db_canonical_id(code)
+        if not canonical_id:
+            return self._unavailable("track_record_identity_unresolved")
+
+        try:
+            from src.storage import DatabaseManager
+
+            engine = DatabaseManager.get_instance()._engine
+            with engine.connect() as conn:
+                from sqlalchemy import text
+
+                rows = conn.execute(
+                    text(
+                        """
+                        SELECT s.action, s.horizon, s.status, s.created_at,
+                               o.eval_status, o.outcome, o.direction_correct,
+                               o.unable_reason, o.stock_return_pct, o.direction_expected
+                        FROM decision_signals s
+                        LEFT JOIN decision_signal_outcomes o ON o.signal_id = s.id
+                        WHERE s.canonical_id = :cid
+                        ORDER BY s.created_at DESC
+                        LIMIT 30
+                        """
+                    ),
+                    {"cid": canonical_id},
+                ).fetchall()
+        except Exception as exc:
+            logger.warning("[StockProfile] track_record block failed: %s", exc, exc_info=True)
+            return self._unavailable("track_record_query_failed")
+
+        if not rows:
+            return {
+                "status": "unavailable",
+                "data": None,
+                "limitations": ["no_signal_history"],
+            }
+
+        # 方向判断（up/not_up/not_down）与区间判断（flat，即观望）必须分开统计，
+        # 这是 decision_signal_outcome_service 已确立的规则：混合命中率会让"从不下
+        # 方向判断"的策略显得很准。此处同样分开，且只把方向样本当作可校准依据。
+        DIRECTIONAL = {"up", "not_down", "not_up"}
+        RANGE = {"flat"}
+
+        completed = hit = miss = unable = 0
+        dir_completed = dir_hit = 0
+        range_completed = range_hit = 0
+        recent: list = []
+        for r in rows:
+            eval_status = r[4]
+            expected = r[9] if len(r) > 9 else None
+            correct = r[6]
+            if eval_status == "completed":
+                completed += 1
+                # 原始 SQL 读回来的是 SQLite 的 0/1，不是 Python 的 True/False，
+                # 因此不能用 `is True` —— 那会永远为假，命中率恒等于 0。
+                is_hit = correct in (True, 1)
+                if is_hit:
+                    hit += 1
+                else:
+                    miss += 1
+                if expected in DIRECTIONAL:
+                    dir_completed += 1
+                    if is_hit:
+                        dir_hit += 1
+                elif expected in RANGE:
+                    range_completed += 1
+                    if is_hit:
+                        range_hit += 1
+            elif eval_status:
+                unable += 1
+            recent.append({
+                "action": r[0],
+                "horizon": r[1],
+                "status": r[2],
+                "created_at": str(r[3]) if r[3] else None,
+                "eval_status": eval_status,
+                "outcome": r[5],
+                "direction_correct": r[6],
+                "unable_reason": r[7],
+                "stock_return_pct": r[8],
+            })
+
+        limitations: list = []
+        if completed == 0:
+            # 有记录但一次都没验证成 —— 说清楚是"样本不足"还是"全部到期未到"
+            limitations.append("no_completed_evaluations")
+        elif dir_completed < 10:
+            # 与 decision_signal_outcome_service 的 MIN_REVIEW_SAMPLE_SIZE 一致：
+            # 只能按【方向样本】判定可校准性 —— 区间样本再多也不代表方向判断能力。
+            limitations.append("insufficient_directional_sample_for_calibration")
+        if completed and dir_completed == 0:
+            limitations.append("no_directional_evaluations")
+
+        return {
+            "status": "ok" if not limitations else "partial",
+            "data": {
+                "signal_count": len(rows),
+                "completed": completed,
+                "hit": hit,
+                "miss": miss,
+                "unable": unable,
+                "hit_rate_pct": round(hit / completed * 100, 2) if completed else None,
+                "directional_completed": dir_completed,
+                "directional_hit_rate_pct": (
+                    round(dir_hit / dir_completed * 100, 2) if dir_completed else None
+                ),
+                "range_completed": range_completed,
+                "range_hit_rate_pct": (
+                    round(range_hit / range_completed * 100, 2) if range_completed else None
+                ),
+                "recent": recent[:10],
+            },
+            "limitations": limitations,
         }
 
     @staticmethod
@@ -456,9 +690,14 @@ class StockProfileService:
 
     @staticmethod
     def _evidence_quality(blocks: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        statuses = {name: str(blocks[name]["status"]) for name in _BLOCK_NAMES}
+        # 用 .get 而不是下标：新块在旧调用方或不支持的标的上可能缺席，
+        # 缺席应当算 unavailable（并如实反映），而不是抛 KeyError 让整次查询失败。
+        statuses = {
+            name: str((blocks.get(name) or {}).get("status") or "unavailable")
+            for name in _BLOCK_NAMES
+        }
         status_values = set(statuses.values())
-        if status_values == {"fresh"}:
+        if status_values and status_values <= _HEALTHY_STATUSES:
             overall = "fresh"
         elif status_values == {"unavailable"}:
             overall = "unavailable"
@@ -466,7 +705,9 @@ class StockProfileService:
             overall = "partial"
         limitations = []
         for name in _BLOCK_NAMES:
-            limitations.extend(str(item) for item in blocks[name].get("limitations") or [])
+            limitations.extend(
+                str(item) for item in (blocks.get(name) or {}).get("limitations") or []
+            )
         return {
             "status": overall,
             "blocks": statuses,
