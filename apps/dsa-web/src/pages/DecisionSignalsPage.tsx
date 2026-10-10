@@ -416,6 +416,11 @@ const DecisionSignalsPage: React.FC = () => {
   const [timelineFilters, setTimelineFilters] = useState<TimelineFilters>(DEFAULT_TIMELINE_FILTERS);
   const [appliedTimelineContext, setAppliedTimelineContext] = useState<AppliedTimelineContext | null>(null);
   const [timelineItems, setTimelineItems] = useState<DecisionSignalItem[]>([]);
+
+  // 该股票在时间线上是否已有历史记录。用于区分「从未分析过」与「有历史但均已过期」。
+  const hasTimelineHistory = timelineItems.some(
+    (item) => item.stockCode === activeStockContext?.code,
+  );
   const [timelineSearched, setTimelineSearched] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [timelineError, setTimelineError] = useState<ParsedApiError | null>(null);
@@ -1426,12 +1431,24 @@ const DecisionSignalsPage: React.FC = () => {
           ) : null}
           {latestError ? <ApiErrorAlert className="mt-3" error={latestError} /> : null}
           {latestSearched && !latestLoading && !latestError && latestItems.length === 0 ? (
-            <EmptyState
-              className="mt-4 border-none bg-transparent py-6 shadow-none"
-              title={t('decisionSignals.noLatestTitle')}
-              description={t('decisionSignals.noLatestDescription')}
-              icon={<Activity className="h-6 w-6" />}
-            />
+            // 「从未分析过」和「有历史但都过期」是两件不同的事，此前共用一句
+            // 「没有 active 信号」。后者下方时间线明明列着历史记录，上面却说没有，
+            // 自相矛盾，用户据此以为查询失败。
+            hasTimelineHistory ? (
+              <EmptyState
+                className="mt-4 border-none bg-transparent py-6 shadow-none"
+                title={t('decisionSignals.noLatestTitle')}
+                description={t('decisionSignals.noLatestDescription')}
+                icon={<Activity className="h-6 w-6" />}
+              />
+            ) : (
+              <EmptyState
+                className="mt-4 border-none bg-transparent py-6 shadow-none"
+                title={t('decisionSignals.neverHadSignalTitle')}
+                description={t('decisionSignals.neverHadSignalDescription')}
+                icon={<Activity className="h-6 w-6" />}
+              />
+            )
           ) : null}
           {latestLoading ? <p className="mt-3 text-sm text-secondary-text">{t('common.loading')}...</p> : null}
           {latestItems.length > 0 ? (
