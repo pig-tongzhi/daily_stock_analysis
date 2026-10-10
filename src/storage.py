@@ -225,6 +225,41 @@ class CompanyMetrics(Base):
     created_at = Column(DateTime, nullable=True)
 
 
+
+class MarketSnapshot(Base):
+    """全市场横截面快照（第 1 层：只存可筛选的数值，不存描述性文本）。
+
+    为什么需要它：选股每次都现场拉 5211 只，用完即弃，于是三件事永远做不到 ——
+    回测（"这个策略上月会选出什么"）、横截面查询（"全市场 PE<15 且 ROE>15"）、
+    以及避免重复抓取。
+
+    为什么只存数值：5211 只 × 完整财务/概念 ≈ 50 MB/天，但选股只要 5 只、
+    问股只问 1 只 —— 那不是能力而是负债（维护成本和陈旧数据误导）。
+    轻量数值层约 300 KB/天，换来回测与横截面能力，是划算的。
+
+    name 与 industry 保留：它们是分类键而非描述性文本，横向筛选离不开。
+    主营描述、概念列表留给第 2 层的 company_profile。
+    """
+
+    __tablename__ = 'market_snapshot'
+
+    canonical_id = Column(String(32), primary_key=True)
+    as_of = Column(Date, primary_key=True)
+    code = Column(String(16), nullable=False, index=True)
+    name = Column(String(64), nullable=True)
+    industry = Column(String(32), nullable=True, index=True)
+    price = Column(Float, nullable=True)
+    change_pct = Column(Float, nullable=True)
+    amount = Column(Float, nullable=True)
+    total_mv = Column(Float, nullable=True)
+    pe_ratio = Column(Float, nullable=True)
+    pb_ratio = Column(Float, nullable=True)
+    volume_ratio = Column(Float, nullable=True)
+    turnover_rate = Column(Float, nullable=True)
+    snapshot_source = Column(String(32), nullable=True)
+    created_at = Column(DateTime, nullable=True)
+
+
 class NewsIntel(Base):
     """
     新闻情报数据模型

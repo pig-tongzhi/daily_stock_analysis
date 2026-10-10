@@ -180,6 +180,18 @@ def screen(
     snapshot_source = str(snapshot_df.attrs.get("snapshot_source", ""))
     source_errors = [str(item) for item in snapshot_df.attrs.get("source_errors", [])]
     degradation.extend(f"Snapshot source fallback: {item}" for item in source_errors)
+
+    # 顺手持久化全市场横截面（第 1 层）。选股本来就要拉这份快照，存下来不额外
+    # 抓数据，只是不再丢掉 —— 这是回测与横截面查询唯一的数据来源。
+    # fail-open：存快照失败绝不能影响选股本身。
+    try:
+        from src.services.market_snapshot_service import save_market_snapshot
+
+        saved = save_market_snapshot(snapshot_df, source=snapshot_source)
+        if saved:
+            logger.info("[MarketSnapshot] 已存 %s 行（source=%s）", saved, snapshot_source)
+    except Exception:
+        logger.warning("[MarketSnapshot] 持久化失败（fail-open）", exc_info=True)
     if bool(snapshot_df.attrs.get("fallback_used")):
         stale_age = snapshot_df.attrs.get("stale_age_hours")
         if stale_age is None:
