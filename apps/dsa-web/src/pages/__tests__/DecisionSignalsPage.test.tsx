@@ -560,6 +560,29 @@ describe('DecisionSignalsPage', () => {
     });
   });
 
+  it('re-queries when 筛选 is pressed without changing any filter', async () => {
+    // 回归：既有的 passes filter parameters 测试会先改动市场/代码/动作三个条件，
+    // 引用因此改变、请求照发，永远覆盖不到「什么都不改直接点」这条路径。
+    // 而 getInitialFilters 曾直接返回 DEFAULT_LIST_FILTERS 常量本身，使 filters 与
+    // appliedFilters 是同一个对象；setAppliedFilters(filters) 引用未变 → React 判定
+    // 状态相同而跳过重渲染 → 加载 effect 不重跑 → 按钮点了完全没反应。
+    renderPage();
+    await screen.findByText('贵州茅台');
+    const before = vi.mocked(decisionSignalsApi.list).mock.calls.length;
+
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    await waitFor(() => {
+      expect(vi.mocked(decisionSignalsApi.list).mock.calls.length).toBeGreaterThan(before);
+    });
+
+    // 连点第二次也必须重新查询：按这个按钮就是要求查一次。
+    const after = vi.mocked(decisionSignalsApi.list).mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    await waitFor(() => {
+      expect(vi.mocked(decisionSignalsApi.list).mock.calls.length).toBeGreaterThan(after);
+    });
+  });
+
   it('uses an exact analysis source report lookup when a report id filter is applied', async () => {
     renderPage();
     await screen.findByText('贵州茅台');

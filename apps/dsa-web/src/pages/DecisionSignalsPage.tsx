@@ -180,7 +180,10 @@ function parseSourceReportId(value: string): number | undefined {
 function getInitialFilters(search = typeof window === 'undefined' ? '' : window.location.search): ListFilters {
   const params = new URLSearchParams(search);
   const sourceReportId = parseSourceReportId(params.get('sourceReportId') ?? params.get('source_report_id') ?? '');
-  if (sourceReportId === undefined) return DEFAULT_LIST_FILTERS;
+  // 必须返回副本：直接返回 DEFAULT_LIST_FILTERS 会让 filters 与 appliedFilters
+  // 两个 state 共用同一个对象，引用相等使 React 跳过更新（详见 handleApplyFilters）。
+  // 同时 React state 也不应别名模块级常量，否则一次就地修改会污染整个页面的默认值。
+  if (sourceReportId === undefined) return { ...DEFAULT_LIST_FILTERS };
   return {
     ...DEFAULT_LIST_FILTERS,
     sourceReportId: String(sourceReportId),
@@ -664,7 +667,13 @@ const DecisionSignalsPage: React.FC = () => {
 
   const handleApplyFilters = (event: React.FormEvent) => {
     event.preventDefault();
-    setAppliedFilters(filters);
+    // 每次都传新对象。此前传的是 filters 本身，而 filters 与 appliedFilters 在
+    // 无 URL 参数时拿到的是同一个 DEFAULT_LIST_FILTERS 引用（getInitialFilters
+    // 直接返回该常量），于是 setAppliedFilters 引用未变 —— React 判定状态相同、
+    // 跳过重渲染，依赖 appliedFilters 的加载 effect 不重跑，请求根本不发出。
+    // 表现就是：不改条件点「筛选」毫无反应，改了条件才有效。
+    // 用户点这个按钮就是要求查询，因此必须无条件重新查询。
+    setAppliedFilters({ ...filters });
     setPage(1);
   };
 
