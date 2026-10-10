@@ -1,7 +1,15 @@
 <!doctype html>
-<html lang="en">
+<!--
+  translate="no" + notranslate：应用自带中/英切换（侧边栏底部），机器翻译只会
+  破坏界面 —— Chrome 把文本节点换成 <font> 后，React 更新这些被外部改过的节点
+  时抛 NotFoundError: Failed to execute 'removeChild'，路由边界据此显示
+  「加载页面失败」。这是一整类极难复现的假故障（干净浏览器永远测不出来），
+  从源头禁掉比事后兜底可靠。
+-->
+<html lang="en" translate="no">
   <head>
     <meta charset="UTF-8" />
+    <meta name="google" content="notranslate" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>

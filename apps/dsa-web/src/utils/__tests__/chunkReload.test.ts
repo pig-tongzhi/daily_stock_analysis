@@ -29,6 +29,17 @@ describe('chunkReload', () => {
       expect(isChunkLoadError(new Error(message))).toBe(true);
     });
 
+    it('treats DOM-mutation failures as recoverable too', () => {
+      // 浏览器机器翻译会把文本节点换成 <font>，React 之后更新这些被外部改过的
+      // 节点时抛 removeChild —— 与代码无关，重载即可恢复。
+      expect(isChunkLoadError(new Error(
+        "NotFoundError: Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.",
+      ))).toBe(true);
+      expect(isChunkLoadError(new Error(
+        "Failed to execute 'insertBefore' on 'Node'",
+      ))).toBe(true);
+    });
+
     it('ignores ordinary render errors', () => {
       expect(isChunkLoadError(new Error('Cannot read properties of undefined'))).toBe(false);
       expect(isChunkLoadError(undefined)).toBe(false);
@@ -41,11 +52,16 @@ describe('chunkReload', () => {
       expect(reload).toHaveBeenCalledTimes(1);
     });
 
-    it('refuses a second reload inside the guard window, so a broken build cannot loop', () => {
+    it('allows a few reloads inside the window, then refuses so a broken build cannot loop', () => {
+      // 旧行为是「15 秒内只许一次」，于是第二次失败直接落到失败卡片 —— 而第二次恰恰
+      // 最常见（重载后用户立刻再点，或重载又撞上另一处旧引用）。
       expect(reloadForFreshBundle()).toBe(true);
+      expect(reloadForFreshBundle()).toBe(true);
+      expect(reloadForFreshBundle()).toBe(true);
+      // 超出窗口额度后必须停下，否则构建真损坏会无限重载。
       expect(reloadForFreshBundle()).toBe(false);
       expect(reloadForFreshBundle()).toBe(false);
-      expect(reload).toHaveBeenCalledTimes(1);
+      expect(reload).toHaveBeenCalledTimes(3);
     });
 
     it('reloads again once the guard window has passed', () => {

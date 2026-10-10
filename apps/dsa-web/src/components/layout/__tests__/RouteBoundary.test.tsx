@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { lazy } from 'react';
 import type React from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -151,8 +151,10 @@ describe('RouteOutletBoundary stale-chunk recovery', () => {
     }
   });
 
-  it('keeps the failure card when the same chunk fails again within the guard window', async () => {
-    // 守卫必须真的生效：构建本身损坏时不能无限重载，要落回失败卡片。
+  it('keeps reloading for a repeat failure, then stops at the window limit', async () => {
+    // 旧行为是「15 秒内只许重载一次」，于是第二次失败直接落到失败卡片 —— 而第二次
+    // 恰恰最常见（重载后用户立刻再点，或重载又撞上另一处旧引用）。现在改为窗口内
+    // 计数：60 秒内最多 3 次，既能自愈连续故障，又不会因构建真损坏而无限重载。
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const reload = vi.fn();
     const originalReload = window.location.reload;
@@ -160,34 +162,45 @@ describe('RouteOutletBoundary stale-chunk recovery', () => {
       configurable: true,
       value: { ...window.location, reload },
     });
-    // 模拟刚刚已经重载过一次
-    window.sessionStorage.setItem('dsh.chunkReloadAt', String(Date.now()));
 
     const StaleChunkRoute = lazy(() => (
-      Promise.reject(new TypeError('Failed to fetch dynamically imported module: /assets/y.js')) as Promise<{
+      Promise.reject(new TypeError('Failed to fetch dynamically imported module: /assets/z.js')) as Promise<{
         default: React.ComponentType;
       }>
     ));
 
-    try {
-      render(
-        <MemoryRouter initialEntries={['/chat']}>
-          <Routes>
-            <Route
-              element={(
-                <Shell>
-                  <RouteOutletBoundary />
-                </Shell>
-              )}
-            >
-              <Route path="/chat" element={<StaleChunkRoute />} />
-            </Route>
-          </Routes>
-        </MemoryRouter>,
-      );
+    const renderOnce = () => render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <Routes>
+          <Route
+            element={(
+              <Shell>
+                <RouteOutletBoundary />
+              </Shell>
+            )}
+          >
+            <Route path="/chat" element={<StaleChunkRoute />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
 
+    try {
+      // 已用掉 3 次额度 → 不再重载，显示失败卡片
+      window.sessionStorage.clear();
+      window.sessionStorage.setItem('dsh.chunkReloadAt', String(Date.now()));
+      window.sessionStorage.setItem('dsh.chunkReloadCount', '3');
+      const first = renderOnce();
       expect(await screen.findByRole('heading', { name: '页面加载失败' })).toBeInTheDocument();
       expect(reload).not.toHaveBeenCalled();
+      first.unmount();
+
+      // 额度未满 → 仍然重载
+      window.sessionStorage.clear();
+      window.sessionStorage.setItem('dsh.chunkReloadAt', String(Date.now()));
+      window.sessionStorage.setItem('dsh.chunkReloadCount', '1');
+      renderOnce();
+      await waitFor(() => expect(reload).toHaveBeenCalled());
     } finally {
       consoleError.mockRestore();
       Object.defineProperty(window, 'location', {
