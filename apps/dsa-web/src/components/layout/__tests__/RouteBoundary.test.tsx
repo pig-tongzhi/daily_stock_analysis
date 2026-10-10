@@ -62,3 +62,41 @@ describe('RouteOutletBoundary', () => {
     }
   });
 });
+
+describe('RouteOutletBoundary error detail', () => {
+  it('shows the real error text so a failure can be reported instead of guessed at', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const BrokenLazyRoute = lazy(() => (
+      Promise.reject(new TypeError('Cannot read properties of undefined (reading x)')) as Promise<{
+        default: React.ComponentType;
+      }>
+    ));
+
+    try {
+      render(
+        <MemoryRouter initialEntries={['/chat']}>
+          <Routes>
+            <Route
+              element={(
+                <Shell>
+                  <RouteOutletBoundary />
+                </Shell>
+              )}
+            >
+              <Route path="/chat" element={<BrokenLazyRoute />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      );
+
+      await screen.findByRole('heading', { name: '页面加载失败' });
+      // 泛泛的提示无法排查；真实错误必须出现在卡片上。
+      expect(screen.getByText('技术详情')).toBeInTheDocument();
+      expect(
+        screen.getByText(/TypeError: Cannot read properties of undefined/),
+      ).toBeInTheDocument();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});

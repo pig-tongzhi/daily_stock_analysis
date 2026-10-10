@@ -35,19 +35,37 @@ type RouteErrorBoundaryProps = {
 
 type RouteErrorBoundaryState = {
   hasError: boolean;
+  /**
+   * 真实错误信息。此前这里只保留 hasError，卡片对【任何】异常都显示同一句
+   * 泛泛的提示，于是真正的失败原因不可见 —— 排查时只能在浏览器外部猜。
+   * 保留原文后，用户看到的、截图给我的就是确切原因。
+   */
+  detail: string;
 };
 
 class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBoundaryState> {
   override state: RouteErrorBoundaryState = {
     hasError: false,
+    detail: '',
   };
 
-  static getDerivedStateFromError(): RouteErrorBoundaryState {
-    return { hasError: true };
+  static getDerivedStateFromError(error: unknown): RouteErrorBoundaryState {
+    const detail =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : typeof error === 'string'
+          ? error
+          : String(error);
+    return { hasError: true, detail };
   }
 
   override componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('Route page failed to render or load', error, errorInfo);
+    // 带上路由与组件栈：控制台里这一条就够定位，不必再复现。
+    console.error(
+      'Route page failed to render or load',
+      { resetKey: this.props.resetKey, message: error?.message, stack: error?.stack },
+      errorInfo,
+    );
     // A rebuilt bundle leaves this page holding stale chunk URLs, which surfaces
     // here as a failed dynamic import rather than anything the user did wrong.
     // Reload once to pick up the new manifest; anything else keeps the card.
@@ -58,7 +76,7 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBo
 
   override componentDidUpdate(prevProps: RouteErrorBoundaryProps) {
     if (this.state.hasError && prevProps.resetKey !== this.props.resetKey) {
-      this.setState({ hasError: false });
+      this.setState({ hasError: false, detail: '' });
     }
   }
 
@@ -80,6 +98,17 @@ class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBo
           <p className="mt-3 text-sm leading-6 text-secondary-text">
             {this.props.text.description}
           </p>
+          {this.state.detail ? (
+            // 显示真实原因：泛泛的提示无法排查，也让人无法准确转述问题。
+            <details className="mt-4 rounded-xl border border-border/70 bg-base/60 p-3 text-left">
+              <summary className="cursor-pointer text-xs font-medium text-secondary-text">
+                技术详情
+              </summary>
+              <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all text-[11px] leading-5 text-secondary-text">
+                {this.state.detail}
+              </pre>
+            </details>
+          ) : null}
           <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
               type="button"
