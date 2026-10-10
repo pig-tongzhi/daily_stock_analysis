@@ -1056,6 +1056,11 @@ class Config:
     # 于是没人在分析时它静默停摆，K 线过期会让到期验证无法完成。
     stock_daily_refresh_enabled: bool = False
     stock_daily_refresh_interval_minutes: int = 60
+    # 本地资讯池的独立抓取。此前只在跑分析时顺带抓取，不跑分析就不更新，
+    # 而资讯的更新节奏（分钟级）与分析的频率（小时/天级）相差两个数量级。
+    # tick 与频率分离：循环定期敲门，真正的频率由既有的 20 分钟冷却决定。
+    news_intel_fetch_loop_enabled: bool = False
+    news_intel_fetch_loop_interval_minutes: int = 30
 
     # === 通知配置（可同时配置多个，全部推送）===
     
@@ -2067,6 +2072,15 @@ class Config:
                 os.getenv('STOCK_DAILY_REFRESH_INTERVAL_MINUTES'),
                 60,
                 field_name='STOCK_DAILY_REFRESH_INTERVAL_MINUTES',
+                minimum=1,
+            ),
+            news_intel_fetch_loop_enabled=os.getenv(
+                'NEWS_INTEL_FETCH_LOOP_ENABLED', 'false'
+            ).lower() == 'true',
+            news_intel_fetch_loop_interval_minutes=parse_env_int(
+                os.getenv('NEWS_INTEL_FETCH_LOOP_INTERVAL_MINUTES'),
+                30,
+                field_name='NEWS_INTEL_FETCH_LOOP_INTERVAL_MINUTES',
                 minimum=1,
             ),
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),

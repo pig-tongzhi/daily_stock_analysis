@@ -1222,3 +1222,45 @@ def test_stock_daily_refresh_is_opt_in_and_covers_signal_only_codes() -> None:
     assert not any(("[" in c or "'" in c or '"' in c) for c in codes), codes
     # stock_list 是列表形态，绝不能被 str() 成 repr
     assert all("," not in c for c in codes)
+
+
+def test_news_intel_fetch_is_opt_in_and_decoupled_from_analysis() -> None:
+    """资讯抓取必须能独立于分析运行，且默认关闭。
+
+    此前资讯只在跑分析时顺带抓取（pipeline / market_analyzer 各一处），于是
+    不跑分析就不更新 —— 资讯的更新节奏被绑在分析频率上，两者相差两个数量级。
+    """
+    from src.config import get_config
+    from src.services.runtime_scheduler import (
+        RuntimeSchedulerService,
+        _news_intel_fetch_interval_seconds,
+    )
+
+    config = get_config()
+    service = RuntimeSchedulerService(owns_schedule=True)
+
+    config.news_intel_fetch_loop_enabled = False
+    assert service._current_news_intel_fetch_background_tasks(config) == []
+    assert all(
+        t["name"] != "news_intel_fetch"
+        for t in service._current_background_tasks(config)
+    )
+
+    config.news_intel_fetch_loop_enabled = True
+    tasks = service._current_news_intel_fetch_background_tasks(config)
+    assert len(tasks) == 1
+    assert tasks[0]["name"] == "news_intel_fetch"
+    assert tasks[0]["interval_seconds"] == 1800  # 30 分钟
+    # 启动瞬间不抓：冷启动发网络请求会拖慢启动，且紧接着的分析也会抓。
+    assert tasks[0]["run_immediately"] is False
+    assert "news_intel_fetch" in {
+        t["name"] for t in service._current_background_tasks(config)
+    }
+
+    # 非法间隔不得变成忙循环
+    for bad in (0, -5, "x", None):
+        config.news_intel_fetch_loop_interval_minutes = bad
+        assert _news_intel_fetch_interval_seconds(config) == 1800
+
+    config.news_intel_fetch_loop_interval_minutes = 45
+    assert _news_intel_fetch_interval_seconds(config) == 2700

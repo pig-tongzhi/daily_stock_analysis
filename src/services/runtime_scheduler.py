@@ -304,6 +304,68 @@ def build_decision_signal_outcome_background_tasks(
     }]
 
 
+def _news_intel_fetch_interval_seconds(config: Config) -> int:
+    interval_minutes = getattr(config, "news_intel_fetch_loop_interval_minutes", 30)
+    try:
+        minutes = int(interval_minutes)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid NEWS_INTEL_FETCH_LOOP_INTERVAL_MINUTES=%r; use fallback 30",
+            interval_minutes,
+        )
+        minutes = 30
+    return minutes * 60 if minutes > 0 else 1800
+
+
+def build_news_intel_fetch_background_tasks(
+    config: Config,
+    *,
+    config_provider: Callable[[], Config],
+) -> List[Dict[str, Any]]:
+    """Build the periodic local news-pool fetch task.
+
+    资讯此前只在跑分析时顺带抓取（pipeline / market_analyzer 各一处），于是
+    不跑分析就不更新 —— 资讯的更新节奏被绑在了分析的频率上，而两者相差两个
+    数量级（最快的源 1 分钟一条，分析可能一天一次）。
+
+    tick 与频率分离：循环只负责【定期敲一次门】，真正的抓取频率仍由既有的
+    NEWS_INTEL_AUTO_FETCH_MIN_INTERVAL_SECONDS（默认 20 分钟）冷却决定。
+    这样分析与循环共用同一个冷却，谁先到谁抓，另一个自动跳过 —— 天然去重，
+    不必再引入第二套频率概念。
+    """
+    if not getattr(config, "news_intel_fetch_loop_enabled", False):
+        return []
+
+    interval_seconds = _news_intel_fetch_interval_seconds(config)
+
+    def fetch_task() -> None:
+        try:
+            from src.services.intelligence_service import IntelligenceService
+
+            # refresh_auto_sources 自己会检查 NEWS_INTEL_AUTO_FETCH_ENABLED 与冷却，
+            # 因此这里不必重复判断；用 force=False 让冷却继续生效。
+            result = IntelligenceService().refresh_auto_sources()
+            logger.info(
+                "[NewsIntelFetch] skipped=%s reason=%s sources=%s saved=%s",
+                result.get("skipped"),
+                result.get("reason"),
+                (result.get("fetch") or {}).get("source_count"),
+                result.get("saved_count"),
+            )
+        except Exception:
+            # 单次失败不能让后台任务永久死掉；下一轮继续。
+            logger.exception("[NewsIntelFetch] scheduled run failed")
+
+    return [{
+        "task": fetch_task,
+        "interval_seconds": interval_seconds,
+        # 启动时不立刻抓：冷启动瞬间发网络请求会拖慢启动，而紧接着的
+        # 第一次分析也会抓 —— 重复。
+        "run_immediately": False,
+        "name": "news_intel_fetch",
+    }]
+
+
 def _stock_daily_refresh_interval_seconds(config: Config) -> int:
     interval_minutes = getattr(config, "stock_daily_refresh_interval_minutes", 60)
     try:
@@ -793,12 +855,47 @@ class RuntimeSchedulerService:
     def _current_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         if self._background_tasks_provider is not None:
             return self._background_tasks_provider(config)
-        # 三个后台任务并列注册：事件监控、到期验证、行情刷新互不依赖，各自独立开关。
+        # 四个后台任务并列注册：事件监控、到期验证、行情刷新、资讯抓取
+        # 互不依赖，各自独立开关。
         return [
             *self._current_agent_event_monitor_background_tasks(config),
             *self._current_decision_signal_outcome_background_tasks(config),
             *self._current_stock_daily_refresh_background_tasks(config),
+            *self._current_news_intel_fetch_background_tasks(config),
         ]
+
+    def _current_news_intel_fetch_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
+        name = "news_intel_fetch"
+        if not getattr(config, "news_intel_fetch_loop_enabled", False):
+            self._background_task_cache.pop(name, None)
+            self._background_task_registered_names.discard(name)
+            return []
+
+        cached = self._background_task_cache.get(name)
+        if cached is None:
+            entries = build_news_intel_fetch_background_tasks(
+                config,
+                config_provider=self._reload_config,
+            )
+            if not entries:
+                self._background_task_cache.pop(name, None)
+                self._background_task_registered_names.discard(name)
+                return []
+            cached = dict(entries[0])
+            cached["name"] = name
+            self._background_task_cache[name] = cached
+            interval_seconds = int(cached["interval_seconds"])
+        else:
+            interval_seconds = _news_intel_fetch_interval_seconds(config)
+
+        run_immediately = bool(cached.get("run_immediately", False))
+        self._background_task_registered_names.add(name)
+        return [{
+            "task": cached["task"],
+            "interval_seconds": interval_seconds,
+            "run_immediately": run_immediately,
+            "name": name,
+        }]
 
     def _current_stock_daily_refresh_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         name = "stock_daily_refresh"
@@ -877,6 +974,7 @@ class RuntimeSchedulerService:
         for attr in (
             "decision_signal_outcome_auto_run_enabled",
             "stock_daily_refresh_enabled",
+            "news_intel_fetch_loop_enabled",
             "agent_event_monitor_enabled",
         ):
             if getattr(config, attr, False):

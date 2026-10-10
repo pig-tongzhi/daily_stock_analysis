@@ -359,6 +359,7 @@ def _build_tool_registry(category_timeout_map):
     from src.agent.tools.data_tools import ALL_DATA_TOOLS
     from src.agent.tools.analysis_tools import ALL_ANALYSIS_TOOLS
     from src.agent.tools.search_tools import ALL_SEARCH_TOOLS
+    from src.agent.tools.intelligence_tools import ALL_LOCAL_INTELLIGENCE_TOOLS
     from src.agent.tools.market_tools import ALL_MARKET_TOOLS
     from src.agent.tools.backtest_tools import ALL_BACKTEST_TOOLS
 
@@ -367,6 +368,7 @@ def _build_tool_registry(category_timeout_map):
         ALL_DATA_TOOLS
         + ALL_ANALYSIS_TOOLS
         + ALL_SEARCH_TOOLS
+        + ALL_LOCAL_INTELLIGENCE_TOOLS
         + ALL_MARKET_TOOLS
         + ALL_BACKTEST_TOOLS
     ):
