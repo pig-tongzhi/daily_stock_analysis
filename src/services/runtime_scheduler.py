@@ -272,16 +272,26 @@ def build_decision_signal_outcome_background_tasks(
                 DecisionSignalOutcomeService,
             )
 
-            result = DecisionSignalOutcomeService().run_outcomes()
+            service = DecisionSignalOutcomeService()
+            result = service.run_outcomes()
             evaluated = int(result.get("evaluated") or 0)
-            if evaluated:
-                logger.info(
-                    "[DecisionSignalOutcome] evaluated=%s created=%s updated=%s unable=%s",
-                    evaluated,
-                    result.get("created"),
-                    result.get("updated"),
-                    result.get("skipped"),
-                )
+            # 无论是否有新增都记录：本次修复查出的三条断裂线全都是沉默失败 ——
+            # 验证器说 unable、LLM 解析器说 no_json_found、日志说"获取成功"但数据没落库。
+            # 只有结果被持续写进日志，下一次静默退化才会被发现，而不是靠人工考古。
+            stats = service.get_stats()
+            logger.info(
+                "[DecisionSignalOutcome] evaluated=%s created=%s updated=%s skipped=%s "
+                "completed=%s unable=%s directional=%s range=%s unable_reasons=%s",
+                evaluated,
+                result.get("created"),
+                result.get("updated"),
+                result.get("skipped"),
+                stats.get("completed"),
+                stats.get("unable"),
+                stats.get("directional_completed"),
+                stats.get("range_completed"),
+                stats.get("unable_reasons"),
+            )
         except Exception:
             # 单次失败不能让后台任务永久死掉；下一轮继续。
             logger.exception("[DecisionSignalOutcome] scheduled run failed")

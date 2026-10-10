@@ -1148,3 +1148,31 @@ def test_outcome_auto_run_task_is_opt_in_and_validates_interval() -> None:
 
     config.decision_signal_outcome_auto_run_interval_minutes = 15
     assert _decision_signal_outcome_interval_seconds(config) == 900
+
+
+def test_outcome_task_logs_reason_breakdown_even_when_nothing_new(caplog) -> None:
+    """任务必须每次都记录结果与 unable 原因分布，而不是只在有新增时记录。
+
+    这次查出的断裂线全是沉默失败：验证器说 unable、解析器说 no_json_found、
+    日志说"获取成功"但数据没落库。持续记录是让下一次退化可见的前提。
+    """
+    import logging
+    from src.config import get_config
+    from src.services.runtime_scheduler import build_decision_signal_outcome_background_tasks
+
+    config = get_config()
+    config.decision_signal_outcome_auto_run_enabled = True
+    tasks = build_decision_signal_outcome_background_tasks(config, config_provider=get_config)
+    assert len(tasks) == 1
+
+    with caplog.at_level(logging.INFO, logger="src.services.runtime_scheduler"):
+        tasks[0]["task"]()
+
+    messages = [record.getMessage() for record in caplog.records]
+    matched = [m for m in messages if "[DecisionSignalOutcome]" in m]
+    assert matched, f"未记录到期验证结果；实际日志={messages}"
+
+    line = matched[-1]
+    # 无论是否有新增，都必须带上 completed/unable 与原因分布
+    for token in ("completed=", "unable=", "directional=", "range=", "unable_reasons="):
+        assert token in line, f"缺少 {token}: {line}"
