@@ -22,6 +22,8 @@ from src.repositories.decision_signal_repo import DecisionSignalRepository
 from src.repositories.stock_repo import StockRepository
 from src.schemas.decision_profile import VALID_DECISION_PROFILES
 from src.services.decision_signal_data_quality import normalize_decision_signal_data_quality
+from src.services.stock_code_utils import resolve_daily_stock_identity
+from src.services.stock_daily_window_resolver import resolve_stock_daily_window
 from src.services.decision_signal_service import (
     HORIZONS,
     SIGNAL_STATUSES,
@@ -591,7 +593,23 @@ class DecisionSignalOutcomeService:
         if anchor_date is None:
             return self._unable_fields(base, reason="missing_anchor_date", direction_expected=direction)
 
-        start_bar = self.stock_repo.get_daily_on_date(code=signal.stock_code, target_date=anchor_date)
+        # 逐一遍历候选形态，并在【同一形态内部】取 start + forward。
+        # 这是 stock_daily_window_resolver 的既有契约（"Start and forward bars are
+        # never combined across code shapes"），skill/backtest 两个循环早已这样做，
+        # 只有这里漏了。直接按 signal.stock_code 精确查询会让 000063 永远取不到
+        # stock_daily 里以 000063.SZ 存储的行情，而 storage.py 的 AC 4 明确规定
+        # 读取路径继续使用 code 列，所以修正放在服务层而不是仓储层。
+        identity = resolve_daily_stock_identity(signal.stock_code)
+        code_candidates = (
+            list(identity.code_candidates) if identity is not None else [signal.stock_code]
+        )
+        window = resolve_stock_daily_window(
+            stock_repo=self.stock_repo,
+            code_candidates=code_candidates,
+            expected_start_date=anchor_date,
+            eval_window_days=eval_days,
+        )
+        start_bar = window.start_bar if window is not None else None
         start_price = getattr(start_bar, "close", None)
         if start_price is None:
             return self._unable_fields(
@@ -611,11 +629,7 @@ class DecisionSignalOutcomeService:
                 start_price=start_price,
             )
 
-        forward_bars = self.stock_repo.get_forward_bars(
-            code=signal.stock_code,
-            analysis_date=anchor_date,
-            eval_window_days=eval_days,
-        )
+        forward_bars = list(window.forward_bars)
         evaluation = BacktestEngine.evaluate_decision_signal(
             direction_expected=direction,
             anchor_date=anchor_date,

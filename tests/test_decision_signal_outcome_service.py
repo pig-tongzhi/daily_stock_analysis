@@ -949,3 +949,49 @@ def test_non_directional_action_is_retryable() -> None:
     from src.services.decision_signal_outcome_service import RETRYABLE_UNABLE_REASONS
 
     assert "non_directional_action" in RETRYABLE_UNABLE_REASONS
+
+
+def test_outcome_resolves_bare_code_against_dotted_stored_shape(isolated_db) -> None:
+    """stock_code=000063 必须能取到以 000063.SZ 存储的行情。
+
+    真实库正是这种组合：decision_signals 存 000063，stock_daily 存 000063.SZ。
+    精确相等查不到，信号会永久 missing_anchor_price 并反复空转。
+    """
+    signal_id = _add_signal(isolated_db, code="000063", action="watch", horizon="3d")
+    with isolated_db.session_scope() as session:
+        for index, close in enumerate([100.0, 101.0, 101.5, 102.0]):
+            session.add(
+                StockDaily(
+                    code="000063.SZ",
+                    date=date(2024, 1, 2 + index),
+                    open=close, high=close, low=close, close=close,
+                )
+            )
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    item = service.run_outcomes(signal_id=signal_id)["items"][0]
+
+    # 锚点 100 → 期末 102.0 = +2.0%，落在 ±2% 内 → hit
+    assert item["eval_status"] == "completed"
+    assert item["start_price"] == 100.0
+    assert item["outcome"] == "hit"
+
+
+def test_outcome_never_mixes_start_and_forward_across_code_shapes(isolated_db) -> None:
+    """契约保持：start 与 forward 必须来自同一个存储形态。
+
+    000063.SZ 有锚点、000063 有 forward。若两者被混用，会算出跨形态的"收益"，
+    那是两个可能不同的价格序列拼出来的伪结果。
+    """
+    signal_id = _add_signal(isolated_db, code="000063", action="watch", horizon="3d")
+    with isolated_db.session_scope() as session:
+        session.add(StockDaily(code="000063.SZ", date=date(2024, 1, 2),
+                               open=100.0, high=100.0, low=100.0, close=100.0))
+        session.add(StockDaily(code="000063", date=date(2024, 1, 3),
+                               open=200.0, high=200.0, low=200.0, close=200.0))
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    item = service.run_outcomes(signal_id=signal_id)["items"][0]
+
+    # 只能看到 000063.SZ 的形态：锚点存在但无 forward → 不可评估，而不是"涨了 100%"
+    assert item["eval_status"] == "unable"
+    assert item["unable_reason"] == "insufficient_forward_bars"
+    assert item["start_price"] == 100.0
