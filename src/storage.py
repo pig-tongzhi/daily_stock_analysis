@@ -177,6 +177,54 @@ class StockDaily(Base):
         }
 
 
+
+class CompanyProfile(Base):
+    """公司档案（慢变）：行业层级、地域、业务概念。
+
+    从 fundamental_snapshot.payload.belong_boards 提取而来。之所以要独立成表，
+    是因为 blob 里的数据能存不能查 —— 无法按行业筛股、也无法把资讯按行业归类。
+
+    板块做了分类而不是照抄：belong_boards 里大量是沪股通/融资融券/MSCI/HS300_
+    这类指数与交易属性，属于噪音；申万行业层级单独成列，业务概念过滤后另存，
+    完整原始列表留在 boards_json 以便规则改动后重算。
+    """
+
+    __tablename__ = 'company_profile'
+
+    canonical_id = Column(String(32), primary_key=True)
+    code = Column(String(16), nullable=False, index=True)
+    name = Column(String(64), nullable=True)
+    market = Column(String(8), nullable=True)
+    industry_l1 = Column(String(32), nullable=True, index=True)
+    industry_l2 = Column(String(32), nullable=True)
+    industry_l3 = Column(String(32), nullable=True)
+    region = Column(String(32), nullable=True)
+    concepts_json = Column(Text, nullable=True)
+    boards_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=True)
+
+
+class CompanyMetrics(Base):
+    """按日累积的估值快照。
+
+    主键含 as_of，**绝不用最新值覆盖** —— 覆盖会让回测看到未来数据（前视偏差）。
+    抓取失败时相应字段为 NULL 而不是沿用上一次的值，原始 status/errors 留在
+    payload 里，NULL 因此是可解释的。
+    """
+
+    __tablename__ = 'company_metrics'
+
+    canonical_id = Column(String(32), primary_key=True)
+    as_of = Column(Date, primary_key=True)
+    pe_ttm = Column(Float, nullable=True)
+    pb = Column(Float, nullable=True)
+    total_mv = Column(Float, nullable=True)
+    circ_mv = Column(Float, nullable=True)
+    payload = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=True)
+
+
 class NewsIntel(Base):
     """
     新闻情报数据模型
