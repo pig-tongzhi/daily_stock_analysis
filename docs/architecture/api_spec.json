@@ -6901,6 +6901,40 @@
             "type": "object",
             "title": "Unable Reasons"
           },
+          "directional_completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Directional Completed",
+            "default": 0
+          },
+          "directional_hit_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Directional Hit Rate Pct"
+          },
+          "range_completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Range Completed",
+            "default": 0
+          },
+          "range_hit_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Hit Rate Pct"
+          },
           "breakdowns": {
             "additionalProperties": {
               "items": {
@@ -9199,6 +9233,40 @@
               }
             ],
             "title": "Hit Rate Pct"
+          },
+          "directional_completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Directional Completed",
+            "default": 0
+          },
+          "directional_hit_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Directional Hit Rate Pct"
+          },
+          "range_completed": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Range Completed",
+            "default": 0
+          },
+          "range_hit_rate_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Hit Rate Pct"
           },
           "avg_return_pct": {
             "anyOf": [
