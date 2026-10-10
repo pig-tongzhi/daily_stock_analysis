@@ -169,8 +169,83 @@ def _append_candidate(
         candidates.append(normalized)
 
 
+# A bare (unprefixed, unsuffixed) 5-digit run is an HK code only when the text
+# actually signals Hong Kong. HK codes are 5 digits, but so are ordinary
+# quantities: treating every 5-digit run as HK turned "本金10000元" (principal
+# 10,000 yuan) into HK10000 — a code that does not exist — and pinned the whole
+# session to it. The positive signals below are deliberately textual only, so
+# extract_stock_codes stays the pure format check web_intent_tokenizer imports.
+_HK_CONTEXT_PATTERN = re.compile(
+    r"港股|港交所|香港股市|香港交易所|(?<![A-Za-z0-9])HK(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_HK_CONTEXT_WINDOW_CHARS = 12
+# An amount/quantity reading is never a code, even when HK words sit nearby
+# ("港股通买入，本金10000元"): a currency/unit immediately after the digits, or
+# an amount noun immediately before them, is decisive.
+_AMOUNT_TRAIL_PATTERN = re.compile(
+    r"^(?:元|块|圆|万|亿|千|股|人民币|美元|港币|美金|RMB|CNY|HKD|USD|%|％)"
+)
+_AMOUNT_LEAD_PATTERN = re.compile(
+    r"(?:本金|金额|预算|资金|投入|市值|余额|赚了|亏了|花了|充值|存入)\s*$"
+)
+# Patterns whose stock shape is unambiguous on its own (no HK context needed).
+_EXPLICIT_CODE_PATTERNS = (
+    (r"(?<![a-zA-Z])(?:SH|SZ|BJ)\d{6}(?!\d)", re.IGNORECASE),
+    (r"(?<![a-zA-Z])hk\d{4,5}(?!\d)", re.IGNORECASE),
+    (r"(?<![a-zA-Z])\d{1,5}\.HK(?![a-zA-Z])", re.IGNORECASE),
+    (r"(?<!\d)(?:[03648]\d{5}|92\d{4})(?!\d)", 0),
+    (r"(?<![a-zA-Z.])([A-Z]{2,5}(?:\.[A-Z]{1,2})?)(?![a-zA-Z0-9])", 0),
+)
+_BARE_HK_PATTERN = re.compile(r"(?<!\d)\d{5}(?!\d)")
+
+
+def _has_ticker_context_hint(text: str) -> bool:
+    """The historical gate for lowercase tickers, reused as the code signal.
+
+    A switch/analysis verb or a compare/choice phrase is what makes a Latin
+    token a ticker ("分析tsla", "比较 01810 和 tsla") instead of a word.
+    """
+    return bool(
+        _SWITCH_PATTERN.search(text)
+        or _STRONG_COMPARE_PATTERN.search(text)
+        or _WEAK_COMPARE_HINT_PATTERN.search(text)
+        or _CHOICE_COMPARE_PATTERN.search(text)
+    )
+
+
+def _has_hk_context(spans: List[tuple[int, int]], start: int, end: int) -> bool:
+    """True when an HK marker sits within the bounded window around a match."""
+    return any(
+        span_start - _HK_CONTEXT_WINDOW_CHARS <= start
+        and end <= span_end + _HK_CONTEXT_WINDOW_CHARS
+        for span_start, span_end in spans
+    )
+
+
+def _collect_explicit_codes(
+    text: str, registry: Optional[Any], index_spans: List[tuple[int, int]]
+) -> List[str]:
+    """Codes from unambiguous shapes; used only as a comparison signal."""
+    found: List[str] = []
+    for pattern, flags in _EXPLICIT_CODE_PATTERNS:
+        for match in re.finditer(pattern, text, flags):
+            start, end = match.span()
+            if registry is not None and not _has_ascii_token_boundaries(text, start, end):
+                continue
+            if _is_inside_index_span(start, end, index_spans):
+                continue
+            raw = match.group(1) if match.lastindex else match.group(0)
+            _append_candidate(found, raw, text, registry)
+    return found
+
+
 def extract_stock_codes(text: str, registry: Optional[Any] = None) -> List[str]:
-    """Extract candidates; no registry preserves the legacy stock-only path."""
+    """Extract candidates; no registry preserves the legacy stock-only path.
+
+    Pure format check: it never consults the stock universe or the name index,
+    which ``web_intent_tokenizer`` relies on.
+    """
     if not text:
         return []
 
@@ -182,13 +257,32 @@ def extract_stock_codes(text: str, registry: Optional[Any] = None) -> List[str]:
             if canonical not in candidates:
                 candidates.append(canonical)
 
-    for pattern, flags in (
-        (r"(?<![a-zA-Z])(?:SH|SZ|BJ)\d{6}(?!\d)", re.IGNORECASE),
-        (r"(?<![a-zA-Z])hk\d{4,5}(?!\d)", re.IGNORECASE),
-        (r"(?<![a-zA-Z])\d{1,5}\.HK(?![a-zA-Z])", re.IGNORECASE),
-        (r"(?<!\d)(?:[03648]\d{5}|92\d{4})(?!\d)", 0),
-        (r"(?<!\d)\d{5}(?!\d)", 0),
-        (r"(?<![a-zA-Z.])([A-Z]{2,5}(?:\.[A-Z]{1,2})?)(?![a-zA-Z0-9])", 0),
+    # A bare 5-digit run keeps its HK reading inside an explicit comparison
+    # ("比较 01810 和 AAPL"): the compare word plus another code-shaped token is
+    # the signal, because no HK word appears there. Computed up front so the
+    # candidate order below stays the historical one.
+    has_explicit_code = bool(candidates) or bool(
+        _collect_explicit_codes(text, registry, index_spans)
+    )
+    if not has_explicit_code and _has_ticker_context_hint(text):
+        for match in _LOWERCASE_TICKER_PATTERN.finditer(text):
+            start, end = match.span(1)
+            if registry is not None and not _has_ascii_token_boundaries(text, start, end):
+                continue
+            if _is_inside_index_span(start, end, index_spans):
+                continue
+            has_explicit_code = True
+            break
+
+    hk_context_spans = [match.span() for match in _HK_CONTEXT_PATTERN.finditer(text)]
+
+    for pattern, flags, is_bare_hk in (
+        (r"(?<![a-zA-Z])(?:SH|SZ|BJ)\d{6}(?!\d)", re.IGNORECASE, False),
+        (r"(?<![a-zA-Z])hk\d{4,5}(?!\d)", re.IGNORECASE, False),
+        (r"(?<![a-zA-Z])\d{1,5}\.HK(?![a-zA-Z])", re.IGNORECASE, False),
+        (r"(?<!\d)(?:[03648]\d{5}|92\d{4})(?!\d)", 0, False),
+        (_BARE_HK_PATTERN.pattern, 0, True),
+        (r"(?<![a-zA-Z.])([A-Z]{2,5}(?:\.[A-Z]{1,2})?)(?![a-zA-Z0-9])", 0, False),
     ):
         for match in re.finditer(pattern, text, flags):
             start, end = match.span()
@@ -196,15 +290,21 @@ def extract_stock_codes(text: str, registry: Optional[Any] = None) -> List[str]:
                 continue
             if _is_inside_index_span(start, end, index_spans):
                 continue
+            if is_bare_hk and not _has_hk_context(hk_context_spans, start, end) and not (
+                has_explicit_code and _has_ticker_context_hint(text)
+            ):
+                # No HK signal anywhere: this is an ordinary number, not a code.
+                continue
+            if is_bare_hk and (
+                _AMOUNT_TRAIL_PATTERN.match(text[end:])
+                or _AMOUNT_LEAD_PATTERN.search(text[:start])
+            ):
+                # Amount/quantity reading, not a code.
+                continue
             raw = match.group(1) if match.lastindex else match.group(0)
             _append_candidate(candidates, raw, text, registry)
 
-    if (
-        _SWITCH_PATTERN.search(text)
-        or _STRONG_COMPARE_PATTERN.search(text)
-        or _WEAK_COMPARE_HINT_PATTERN.search(text)
-        or _CHOICE_COMPARE_PATTERN.search(text)
-    ):
+    if _has_ticker_context_hint(text):
         for match in _LOWERCASE_TICKER_PATTERN.finditer(text):
             start, end = match.span(1)
             if registry is not None and not _has_ascii_token_boundaries(text, start, end):
@@ -214,6 +314,88 @@ def extract_stock_codes(text: str, registry: Optional[Any] = None) -> List[str]:
             _append_candidate(candidates, match.group(1), text, registry)
 
     return candidates
+
+
+# --- Known stock universe (context-code validation) -----------------------
+# A session's stock_code arrives from earlier turns, so it can be a code that
+# does not exist at all (HK10000: a bare 5-digit principal read as an HK code).
+# Unvalidated, it becomes the only allowed code and every tool call for a real
+# stock is blocked with retriable=False. resolve_stock_scope therefore checks
+# the code against the local universe and clears it through the existing
+# invalid-context path when it is positively unknown.
+#
+# Sources are local and non-blocking: the bundled/cached stocks.index.json pool
+# (CN/HK/US/JP/KR) and the resolver's local name table merged with the AkShare
+# disk cache. The check fails open twice over — an empty universe and a code
+# shape the pool does not index (e.g. a foreign suffix) both mean "cannot
+# judge", never "invalid".
+_CODE_UNIVERSE_TTL_SECONDS = 300
+_code_universe_lock = threading.Lock()
+_code_universe_cache: Optional[Tuple[float, frozenset]] = None
+
+_VALIDATABLE_CODE_PATTERN = re.compile(
+    r"^(?:"
+    r"HK\d{5}"                             # canonical HK form
+    r"|\d{6}"                              # bare A-share / JP-KR base code
+    r"|[A-Z]{1,5}(?:\.[A-Z]{1,2})?"        # US ticker (optionally dotted)
+    r"|(?:sh|sz|csi)\d{6}"                 # explicit index canonical
+    r"|\d{6}\.(?:SH|SZ|SS|BJ|KS|T|CSI)"    # explicit suffix form
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def _known_stock_code_universe() -> frozenset:
+    """Upper-cased local code universe, cached; empty when unavailable."""
+    global _code_universe_cache
+    with _code_universe_lock:
+        cached = _code_universe_cache
+        if cached is not None and (time.time() - cached[0]) < _CODE_UNIVERSE_TTL_SECONDS:
+            return cached[1]
+    codes: set = set()
+    try:
+        from src.data.stock_index_loader import (
+            get_stock_code_candidates_map,
+            get_stock_name_index_map,
+        )
+
+        codes.update(get_stock_name_index_map().keys())
+        codes.update(get_stock_code_candidates_map().keys())
+    except Exception as exc:  # fail open: validation is opportunistic
+        logger.debug("Stock code universe (index pool) unavailable: %s", exc)
+    try:
+        codes.update(_stock_name_index().values())
+    except Exception as exc:  # fail open
+        logger.debug("Stock code universe (name index) unavailable: %s", exc)
+    universe = frozenset(
+        str(code).strip().upper()
+        for code in codes
+        if isinstance(code, str) and code.strip()
+    )
+    with _code_universe_lock:
+        _code_universe_cache = (time.time(), universe)
+    return universe
+
+
+def _is_unknown_stock_code(candidate: str, registry: Optional[Any] = None) -> bool:
+    """True only when a recognized code shape is positively absent locally.
+
+    Fails open for any shape the universe does not adjudicate and for an empty
+    universe, so a missing index pool never starts rejecting real codes.
+    """
+    token = (candidate or "").strip().upper()
+    if not token or not _VALIDATABLE_CODE_PATTERN.match(token):
+        return False
+    if registry is not None:
+        try:
+            if registry.find_by_explicit_key(candidate) is not None:
+                return False
+        except Exception:
+            pass
+    universe = _known_stock_code_universe()
+    if not universe:
+        return False
+    return token not in universe
 
 
 # --- Chinese stock names in free text -------------------------------------
@@ -566,6 +748,16 @@ def resolve_stock_scope(
     message_text = message or ""
     current_code = _normalize_stock_code(original_context.get("stock_code"), registry)
     invalid_context_code = bool(current_code and _is_denied_candidate(current_code, message_text))
+    # Existence is the second half of the same validity test: a non-existent
+    # code (HK10000) is as unusable as an exchange token, so it clears through
+    # the same invalid-context path instead of pinning allowed={HK10000}. The
+    # distinction is kept only to decide what an empty message may return below.
+    unknown_context_code = bool(
+        current_code
+        and not invalid_context_code
+        and _is_unknown_stock_code(current_code, registry)
+    )
+    invalid_context_code = invalid_context_code or unknown_context_code
     original_context.pop("allowed_stock_codes", None)
     if invalid_context_code:
         original_context.pop("stock_code", None)
@@ -575,13 +767,26 @@ def resolve_stock_scope(
     if not current_code:
         if invalid_context_code or strict_initial_scope:
             candidates = extract_stock_mentions(message_text, registry)
-            trusted = _trusted_switch_candidates(message_text, candidates, registry)
+            # An invalid anchor must not be able to trap the turn: relax the
+            # name-corroboration tail test the same way a mid-session switch
+            # does, so "分析宁德时代的基本面" still takes over. A genuine first
+            # turn (no invalid anchor) stays strict, because there is no current
+            # stock to fall back on and a loose match would fabricate a lock.
+            trusted = _trusted_switch_candidates(
+                message_text,
+                candidates,
+                registry,
+                allow_attribute_tail=invalid_context_code,
+            )
             if len(candidates) >= 2:
                 # A message naming two stocks is a comparison regardless of how
                 # each name was corroborated.
                 allowed = set(candidates)
                 expected = ""
             elif len(candidates) == 1 and candidates[0] in trusted:
+                # No switch verb is required here: the invalid anchor is gone,
+                # so an explicitly named valid stock is the only sane target
+                # ("600276怎么样" recovers a session polluted with HK10000).
                 allowed = {candidates[0]}
                 expected = candidates[0]
             else:
@@ -590,7 +795,14 @@ def resolve_stock_scope(
                 # that could lock the session to an unrelated stock.
                 allowed = set()
                 expected = ""
-            if strict_initial_scope and not invalid_context_code and not allowed:
+            if not allowed and (
+                unknown_context_code
+                or (strict_initial_scope and not invalid_context_code)
+            ):
+                # Nothing usable in the message: fail open like a fresh turn
+                # rather than leaving an empty allowed set, which blocks every
+                # stock-scoped tool call. Denied-token anchors keep the existing
+                # blocking contract (tests pin allowed=set() for "继续看" + HK).
                 return StockScopeResolution(
                     effective_context=_with_skills(original_context, skills),
                     stock_scope=None,
