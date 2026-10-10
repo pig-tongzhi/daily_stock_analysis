@@ -11,6 +11,7 @@ import math
 import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from src.config import get_config
 from src.core.backtest_engine import BacktestEngine, EvaluationConfig
 from src.core.trading_calendar import resolve_historical_daily_bar_date
 from src.repositories.decision_signal_outcome_repo import (
@@ -64,6 +65,10 @@ RETRYABLE_UNABLE_REASONS = frozenset({
     "insufficient_forward_bars",
     "missing_end_close",
     "invalid_end_close",
+    # 方向映射会随语义修正而变（例如 watch 从 None 改为 flat），若该原因不可重试，
+    # 旧行会被永久判定为死路，无法在映射更新后自愈。这个分支在读取任何行情之前
+    # 就返回，所以重试几乎零成本。
+    "non_directional_action",
 })
 BATCH_CANDIDATE_SCAN_PAGE_SIZE = 500
 MIN_PROFILE_CALIBRATION_SAMPLE_SIZE = 30
@@ -618,7 +623,7 @@ class DecisionSignalOutcomeService:
             forward_bars=forward_bars,
             config=EvaluationConfig(
                 eval_window_days=eval_days,
-                neutral_band_pct=2.0,
+                neutral_band_pct=self._neutral_band_pct(),
                 engine_version=DECISION_SIGNAL_OUTCOME_ENGINE_VERSION,
             ),
         )
@@ -656,6 +661,21 @@ class DecisionSignalOutcomeService:
         if action == "watch":
             return "flat"
         return None
+
+    @staticmethod
+    def _neutral_band_pct() -> float:
+        """中性带宽度，来自 backtest_neutral_band_pct。
+
+        这里曾硬编码 2.0，而 BacktestService 一直读配置。同一条判断在两个引擎里
+        用不同的带宽度会对同一段行情给出不同结论 —— 不一致本身就是缺陷。
+        """
+        config = get_config()
+        raw = getattr(config, "backtest_neutral_band_pct", 2.0)
+        try:
+            value = abs(float(raw))
+        except (TypeError, ValueError):
+            return 2.0
+        return value if value > 0 else 2.0
 
     def _snapshot_fields(self, signal: DecisionSignalRecord, horizon: str) -> Dict[str, Any]:
         data_quality_level = self._data_quality_level(signal)

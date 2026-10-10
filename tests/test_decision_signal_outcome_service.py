@@ -897,3 +897,55 @@ def test_anchor_date_unknown_market_keeps_raw_value(isolated_db) -> None:
     with isolated_db.session_scope() as session:
         record = session.get(DecisionSignalRecord, signal_id)
         assert service._anchor_date(record) == _date(2026, 10, 2)
+
+
+def test_neutral_band_pct_follows_config_not_a_hardcoded_two(isolated_db, monkeypatch) -> None:
+    """中性带必须来自 backtest_neutral_band_pct，而不是硬编码 2.0。
+
+    同一条判断在 BacktestService 与 DecisionSignal 两个引擎里必须用同一个带宽，
+    否则同一段行情会得出不同结论。
+    """
+    from src.config import get_config
+
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+    config = get_config()
+    assert service._neutral_band_pct() == 2.0
+
+    # 必须打在实例上：get_config() 返回单例，实例属性会遮蔽类属性
+    monkeypatch.setattr(config, "backtest_neutral_band_pct", 5.0, raising=False)
+    assert service._neutral_band_pct() == 5.0
+
+    # 非法值必须退回安全默认，而不是抛错或产生 0 带宽
+    monkeypatch.setattr(config, "backtest_neutral_band_pct", "bogus", raising=False)
+    assert service._neutral_band_pct() == 2.0
+    monkeypatch.setattr(config, "backtest_neutral_band_pct", -3.0, raising=False)
+    assert service._neutral_band_pct() == 3.0
+
+
+def test_neutral_band_from_config_changes_the_outcome(isolated_db, monkeypatch) -> None:
+    """带宽生效到判定结果上：+3% 在 2% 带内为 miss，在 5% 带内为 hit。"""
+    signal_id = _add_signal(isolated_db, code="600519", action="watch", horizon="3d")
+    _seed_bars(isolated_db, code="600519", closes=[101.0, 102.0, 103.0])
+    service = DecisionSignalOutcomeService(db_manager=isolated_db)
+
+    narrow = service.run_outcomes(signal_id=signal_id)["items"][0]
+    assert narrow["stock_return_pct"] == 3.0
+    assert narrow["outcome"] == "miss"
+
+    from src.config import get_config
+
+    monkeypatch.setattr(get_config(), "backtest_neutral_band_pct", 5.0, raising=False)
+    service.run_outcomes(signal_id=signal_id, force=True)
+    wide = service.run_outcomes(signal_id=signal_id)["items"][0]
+    assert wide["outcome"] == "hit"
+
+
+def test_non_directional_action_is_retryable() -> None:
+    """该原因必须可重试：方向映射会随语义修正而变，否则旧行永久死路。
+
+    这正是本次修复的现场 —— watch 曾经映射为 None，18 行因此被判死并且
+    永远无法在映射更新后自愈。
+    """
+    from src.services.decision_signal_outcome_service import RETRYABLE_UNABLE_REASONS
+
+    assert "non_directional_action" in RETRYABLE_UNABLE_REASONS
