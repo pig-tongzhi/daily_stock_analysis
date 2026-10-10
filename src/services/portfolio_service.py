@@ -209,7 +209,9 @@ class PortfolioService:
             raise ValueError("fee and tax must be >= 0")
         symbol_norm = self._normalize_symbol_for_storage(symbol)
         if not symbol_norm:
-            raise ValueError("symbol is required")
+            raise ValueError(
+                f"无法识别股票标识 {symbol!r}：请用股票代码（如 002567）或可解析的股票名称"
+            )
         trade_uid_norm = (trade_uid or "").strip() or None
         dedup_hash_norm = (dedup_hash or "").strip() or None
         try:
@@ -1253,7 +1255,37 @@ class PortfolioService:
 
     @staticmethod
     def _normalize_symbol_for_storage(symbol: str) -> str:
-        return canonical_stock_code(symbol)
+        """把用户输入归一成可直接入库的股票代码。
+
+        此前只调 ``canonical_stock_code``，而它不认识中文名称 ——
+        ``canonical_stock_code('唐人神')`` 原样返回 ``'唐人神'``，于是名称被写进
+        symbol 列。后果是持仓的行情、盈亏、市值全部解析不出来（名称不是代码）。
+        实测库里的唯一持仓就是这么来的：``symbol='唐人神'`` 20000 股。
+
+        现在先按代码解析；结果若仍不像代码，再走名称解析器。解析不出来就返回空串，
+        由调用方给出明确报错 —— 静默存下一个名称是更糟的选择。
+        """
+        raw = str(symbol or "").strip()
+        if not raw:
+            return ""
+
+        normalized = canonical_stock_code(raw)
+
+        # 代码形态的判断：A 股/港股等含数字，美股是纯字母但有长度上限。
+        # 含中文（或其它非 ASCII）说明这是名称，必须解析而不是原样穿透。
+        is_non_ascii = any(ord(ch) > 127 for ch in normalized)
+        if not is_non_ascii:
+            return normalized
+
+        from src.services.name_to_code_resolver import resolve_name_to_code
+
+        resolved = resolve_name_to_code(raw)
+        if not resolved:
+            logger.warning(
+                "[Portfolio] 无法把股票标识解析为代码：%r；拒绝写入", raw
+            )
+            return ""
+        return canonical_stock_code(resolved)
 
     @staticmethod
     def _normalize_symbol_for_position(symbol: str) -> str:

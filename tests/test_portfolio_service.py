@@ -1400,3 +1400,55 @@ class PortfolioServiceTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSymbolNormalizationAcceptsNames:
+    """回归：持仓 symbol 曾把股票名称原样入库。
+
+    _normalize_symbol_for_storage 只调 canonical_stock_code，而它不认识中文名，
+    canonical_stock_code('唐人神') 原样返回 '唐人神'。于是名称被写进 symbol 列，
+    持仓的行情、盈亏、市值全都解析不出来 —— 库里唯一的持仓就是这么来的
+    （symbol='唐人神'，20000 股）。
+    """
+
+    def test_chinese_name_resolves_to_code(self):
+        from src.services.portfolio_service import PortfolioService
+
+        svc = PortfolioService.__new__(PortfolioService)
+        assert svc._normalize_symbol_for_storage("唐人神") == "002567"
+        assert svc._normalize_symbol_for_storage("贵州茅台") == "600519"
+        assert svc._normalize_symbol_for_storage("老白干酒") == "600559"
+
+    def test_codes_are_unaffected(self):
+        from src.services.portfolio_service import PortfolioService
+
+        svc = PortfolioService.__new__(PortfolioService)
+        # 代码路径必须与改动前完全一致，不能因为加了名称解析而改变
+        assert svc._normalize_symbol_for_storage("002567") == "002567"
+        assert svc._normalize_symbol_for_storage("600519") == "600519"
+        assert svc._normalize_symbol_for_storage("000063.SZ") == "000063.SZ"
+        assert svc._normalize_symbol_for_storage("sz002567") == "SZ002567"
+
+    def test_us_symbol_is_unaffected(self):
+        from src.services.portfolio_service import PortfolioService
+
+        svc = PortfolioService.__new__(PortfolioService)
+        # 纯字母但非中文，不应被当成名称去走解析器
+        assert svc._normalize_symbol_for_storage("AAPL") == "AAPL"
+
+    def test_unresolvable_name_is_rejected_not_stored(self):
+        from src.services.portfolio_service import PortfolioService
+
+        svc = PortfolioService.__new__(PortfolioService)
+        # 解析不出来必须返回空串由调用方报错，绝不能静默存下名称
+        assert svc._normalize_symbol_for_storage("不存在的东西") == ""
+        assert svc._normalize_symbol_for_storage("") == ""
+
+    def test_storage_never_yields_non_ascii(self):
+        from src.services.portfolio_service import PortfolioService
+
+        svc = PortfolioService.__new__(PortfolioService)
+        for raw in ("唐人神", "贵州茅台", "平安银行", "中兴通讯"):
+            out = svc._normalize_symbol_for_storage(raw)
+            assert out, f"{raw} 应能解析"
+            assert all(ord(ch) < 128 for ch in out), f"{raw} → {out!r} 仍含非 ASCII"
