@@ -319,6 +319,19 @@ export type ScreeningTrackingPick = {
   maxDrawdownPct: number | null;
   daysHeld: number | null;
   forwardBars: number;
+  // === 同期基准对比 ===
+  // 基准区间随每只入选自己的窗口走（入选日 → 该入选最新前瞻 K 线日）。
+  // benchmarkAvailable=false 时 benchmarkReason 给出机器原因码；此时
+  // benchmarkReturnPct / excessReturnPct 必须是 null，绝不是 0。
+  benchmarkCode: string | null;
+  benchmarkAvailable: boolean;
+  benchmarkReason: string | null;
+  benchmarkStartDate: string | null;
+  benchmarkStartClose: number | null;
+  benchmarkEndDate: string | null;
+  benchmarkEndClose: number | null;
+  benchmarkReturnPct: number | null;
+  excessReturnPct: number | null;
 };
 
 export type ScreeningTrackingAggregate = {
@@ -332,6 +345,18 @@ export type ScreeningTrackingAggregate = {
   bestReturnPct: number | null;
   worstReturnPct: number | null;
   avgDaysHeld: number | null;
+  // 基准对比只统计"既有可复盘收益、窗口又被指数覆盖"的入选。
+  // 跑赢比例的分母是 beatBenchmarkDenominator，口径由 beatBenchmarkBasis 说明。
+  benchmarkCode: string | null;
+  benchmarkComparable: number;
+  beatBenchmarkRate: number | null;
+  beatBenchmarkBasis: string;
+  beatBenchmarkDenominator: number;
+  avgBenchmarkReturnPct: number | null;
+  medianBenchmarkReturnPct: number | null;
+  avgExcessReturnPct: number | null;
+  medianExcessReturnPct: number | null;
+  benchmarkUnavailableReasons: Array<{ reason: string; count: number }>;
 };
 
 export type ScreeningTrackingStrategy = ScreeningTrackingAggregate & {
@@ -362,9 +387,23 @@ export type ScreeningTrackingResponse = {
   benchmark: {
     available: boolean;
     reason: string;
+    // code = 实际被用作基准的指数（配置里排第一且有本地 K 线的那条）；
+    // windowBasis 恒为 per_pick_window —— 基准区间不是全局统一的一个区间。
+    code: string | null;
+    codesConfigured: string[];
+    windowBasis: string;
     indexSeries: string[];
     stockDailySeriesCount: number;
     marketSnapshotDates: string[];
+    comparablePicks: number;
+    avgBenchmarkReturnPct: number | null;
+    medianBenchmarkReturnPct: number | null;
+    avgExcessReturnPct: number | null;
+    medianExcessReturnPct: number | null;
+    beatBenchmarkRate: number | null;
+    beatBenchmarkBasis: string;
+    beatBenchmarkDenominator: number;
+    unavailableReasons: Array<{ reason: string; count: number }>;
     error?: string;
   };
   notes: string[];

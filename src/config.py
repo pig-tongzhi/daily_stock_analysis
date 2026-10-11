@@ -37,6 +37,7 @@ from src.notification_contracts import (
     is_feishu_app_bot_configured,
     is_feishu_static_configured,
 )
+from src.services.benchmark_index_service import DEFAULT_BENCHMARK_INDEX_CODES
 from src.services.stock_list_parser import split_stock_list
 from src.llm.backend_registry import (
     AUTO_AGENT_BACKEND_ID,
@@ -1070,6 +1071,18 @@ class Config:
     # 上限用于兜住单轮刷新的耗时：刷新循环是串行的、每只股票一次网络请求，
     # 无上限时 60 天窗口可能累积出上千只，单轮耗时超过刷新间隔本身。
     screening_pick_tracking_max_codes: int = 200
+    # 基准指数（沪深300 / 中证500 / 中证1000）的日线同步。
+    # 为什么需要：复盘此前只有个股收益、没有同期基准，于是"+0.47%"既可能是选股
+    # 能力也可能只是大盘 beta。把指数日线落进 stock_daily 之后，复盘才能对每一只
+    # 入选按它**自己的窗口**算出超额收益。
+    # 默认开启：离线时抓取失败只会让基准显示"不可用"，不影响个股复盘本身。
+    screening_benchmark_index_enabled: bool = True
+    # 列表顺序即优先级：复盘取第一个本地有 K 线的作为主基准（默认沪深300），
+    # 其余用于看大小盘覆盖面。必须用显式指数形式（sh000300）—— 裸码 000300 会被
+    # canonical_id 推导当成个股（sz000300）。
+    screening_benchmark_index_codes: List[str] = field(
+        default_factory=lambda: ["sh000300", "sh000905", "sh000852"]
+    )
     # 本地资讯池的独立抓取。此前只在跑分析时顺带抓取，不跑分析就不更新，
     # 而资讯的更新节奏（分钟级）与分析的频率（小时/天级）相差两个数量级。
     # tick 与频率分离：循环定期敲门，真正的频率由既有的 20 分钟冷却决定。
@@ -2107,6 +2120,21 @@ class Config:
                 field_name='SCREENING_PICK_TRACKING_MAX_CODES',
                 minimum=1,
             ),
+            screening_benchmark_index_enabled=os.getenv(
+                'SCREENING_BENCHMARK_INDEX_ENABLED', 'true'
+            ).lower() == 'true',
+            # 用 split_stock_list 而不是裸 split(',')：与 STOCK_LIST 共用同一套
+            # 中文逗号 / 分号 / 换行的容错，粘贴进来的值不会因为分隔符差异静默变空。
+            screening_benchmark_index_codes=[
+                code.strip().lower()
+                for code in split_stock_list(
+                    os.getenv(
+                        'SCREENING_BENCHMARK_INDEX_CODES',
+                        ','.join(DEFAULT_BENCHMARK_INDEX_CODES),
+                    )
+                )
+                if code.strip()
+            ] or list(DEFAULT_BENCHMARK_INDEX_CODES),
             news_intel_fetch_loop_enabled=os.getenv(
                 'NEWS_INTEL_FETCH_LOOP_ENABLED', 'false'
             ).lower() == 'true',

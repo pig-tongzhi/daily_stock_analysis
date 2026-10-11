@@ -882,6 +882,24 @@ const zh = {
   'screening.tracking.benchmark.reason.no_benchmark_series': '本地没有基准序列',
   'screening.tracking.benchmark.reason.benchmark_probe_failed': '基准探测失败',
   'screening.tracking.benchmark.reason.index_series_found': '已找到指数序列',
+  'screening.tracking.benchmark.summary':
+    '基准：{index} · 同期基准收益 {benchmarkReturn} · 平均超额 {avgExcess} · 跑赢基准 {beatRate}',
+  'screening.tracking.benchmark.summaryBasis':
+    '跑赢基准的分母是 {denominator} 只可比入选（既有可复盘收益、窗口又被指数覆盖）。',
+  'screening.tracking.benchmark.windowBasis':
+    '基准区间随每只入选自己的窗口走（入选日 → 该入选最新前瞻 K 线日），不是全局统一的一个区间。',
+  'screening.tracking.benchmark.noComparable':
+    '基准序列已就绪（{index}），但没有窗口被指数覆盖的可复盘入选，暂时给不出超额收益。',
+  'screening.tracking.metric.avgExcess': '平均超额',
+  'screening.tracking.metric.beatRate': '跑赢基准',
+  'screening.tracking.column.excess': '超额收益',
+  'screening.tracking.benchmark.index.sh000300': '沪深300',
+  'screening.tracking.benchmark.index.sh000905': '中证500',
+  'screening.tracking.benchmark.index.sh000852': '中证1000',
+  'screening.tracking.benchmark.reason.benchmark_series_missing': '本地没有可用的指数 K 线',
+  'screening.tracking.benchmark.reason.benchmark_window_not_covered': '该入选的区间不在指数 K 线覆盖范围内',
+  'screening.tracking.benchmark.reason.benchmark_disabled': '基准对比已关闭',
+  'screening.tracking.benchmark.reason.pick_untrackable': '入选本身不可复盘，没有可比的窗口',
 
   'settings.actionSuccess': '操作成功',
   'settings.activePanelDescription': '使用统一字段卡片维护当前分类的系统配置。',
@@ -2071,6 +2089,24 @@ const en: Record<UiTextKey, string> = {
   'screening.tracking.benchmark.reason.no_benchmark_series': 'there is no local benchmark series',
   'screening.tracking.benchmark.reason.benchmark_probe_failed': 'the benchmark probe failed',
   'screening.tracking.benchmark.reason.index_series_found': 'an index series was found',
+  'screening.tracking.benchmark.summary':
+    'Benchmark: {index} · benchmark return over the same windows {benchmarkReturn} · average excess {avgExcess} · beat rate {beatRate}',
+  'screening.tracking.benchmark.summaryBasis':
+    'The beat rate denominator is {denominator} comparable picks (trackable returns whose window is covered by the index).',
+  'screening.tracking.benchmark.windowBasis':
+    'Each pick is compared over its own window (pick date to that pick\u2019s latest forward bar) — not one global window.',
+  'screening.tracking.benchmark.noComparable':
+    'An index series is available ({index}), but no trackable pick has a window covered by it, so no excess return can be stated yet.',
+  'screening.tracking.metric.avgExcess': 'Average excess',
+  'screening.tracking.metric.beatRate': 'Beat benchmark',
+  'screening.tracking.column.excess': 'Excess return',
+  'screening.tracking.benchmark.index.sh000300': 'CSI 300',
+  'screening.tracking.benchmark.index.sh000905': 'CSI 500',
+  'screening.tracking.benchmark.index.sh000852': 'CSI 1000',
+  'screening.tracking.benchmark.reason.benchmark_series_missing': 'there is no usable local index K-line',
+  'screening.tracking.benchmark.reason.benchmark_window_not_covered': 'this pick\u2019s window is outside the local index K-line coverage',
+  'screening.tracking.benchmark.reason.benchmark_disabled': 'benchmark comparison is turned off',
+  'screening.tracking.benchmark.reason.pick_untrackable': 'the pick itself is not trackable, so it has no window to compare',
 
   'settings.actionSuccess': 'Success',
   'settings.activePanelDescription': 'Use unified field cards to maintain this configuration category.',

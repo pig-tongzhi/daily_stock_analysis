@@ -498,6 +498,29 @@ def _tracked_daily_codes(config: Config) -> List[str]:
     return list(dict.fromkeys(codes))
 
 
+def _sync_benchmark_index_bars(config: Config) -> List[Dict[str, Any]]:
+    """同步基准指数日线，供选股复盘做同期对比。
+
+    为什么单独一步而不是把 ``sh000300`` 塞进 ``_tracked_daily_codes``：那条清单
+    会被上面这个循环当成**个股**处理（``resolve_daily_stock_identity`` →
+    ``get_daily_data`` → 按个股口径标记 ``data_source``）。指数行需要走指数接口、
+    并用固定的 ``akshare_index`` 标记，两者混在一起既会拿错数据源，也会让
+    "哪些行是指数"这个判据失效。
+
+    fail-open：基准缺失只是让复盘显示"基准不可用"，不该让个股行情刷新失败。
+    """
+    try:
+        from src.services.benchmark_index_service import sync_benchmark_index_bars
+
+        return sync_benchmark_index_bars(config=config)
+    except Exception:
+        logger.warning(
+            "[BenchmarkIndex] 基准指数同步失败；本轮跳过，个股行情不受影响",
+            exc_info=True,
+        )
+        return []
+
+
 def build_stock_daily_refresh_background_tasks(
     config: Config,
     *,
@@ -508,6 +531,9 @@ def build_stock_daily_refresh_background_tasks(
     行情此前只在跑分析时顺带更新，于是它会在没人分析时静默停摆 —— 本次发现
     stock_daily 停在 2026-09-30，而 10-08/10-09 早已过去。到期验证依赖 K 线，
     所以行情新鲜度不能依附于分析频率。
+
+    同一轮里还会同步基准指数：复盘要回答"有没有跑赢大盘"，没有指数序列就
+    只能给一个孤立的收益率。
     """
     if not getattr(config, "stock_daily_refresh_enabled", False):
         return []
@@ -547,6 +573,14 @@ def build_stock_daily_refresh_background_tasks(
         except Exception:
             # 单次失败不能让后台任务永久死掉；下一轮继续。
             logger.exception("[StockDailyRefresh] scheduled run failed")
+        finally:
+            # 放在 finally 里：即使个股刷新整体炸掉，基准也要有机会更新 ——
+            # 两类数据互不依赖，不能让一个带崩另一个。
+            try:
+                current = config_provider() if callable(config_provider) else config
+                _sync_benchmark_index_bars(current)
+            except Exception:
+                logger.warning("[BenchmarkIndex] 基准同步兜底失败", exc_info=True)
 
     return [{
         "task": refresh_task,

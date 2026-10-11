@@ -9,6 +9,12 @@
 
 诚实优先：拿不到前瞻价格的入选必须显式计入 ``untrackable`` 并单列原因，
 绝不能当成 0% 收益、也不能悄悄从分母里丢掉 —— "48/49 不可见"正是当前要治的病。
+
+收益本身也不够：「+0.47%」在同期大盘 +2% 时是跑输。因此本模块还会拿
+``stock_daily`` 里的基准指数序列（沪深300 等，由 ``benchmark_index_service``
+落库）对**每一只入选按其自己的窗口**算超额收益。入选发生在不同日期，用同一个
+全局区间去比基准会同时算错个股答案与汇总数字；拿不到基准时一律 ``null`` +
+机器原因码，绝不填 0、也绝不换窗口。
 """
 
 from __future__ import annotations
@@ -27,6 +33,17 @@ UNTRACKABLE_MISSING_PICK_PRICE = "missing_pick_price"
 UNTRACKABLE_UNKNOWN_IDENTITY = "unknown_identity"
 UNTRACKABLE_NO_DAILY_ROWS = "no_daily_rows"
 UNTRACKABLE_NO_FORWARD_BARS = "no_forward_bars"
+
+# 基准对比拿不到的原因码。同样只给机器码，人话由前端本地化。
+# 这三种必须分开：处理动作不同（补抓指数 / 补抓更早或更新的指数 / 先让入选可复盘）。
+BENCHMARK_DISABLED = "benchmark_disabled"
+BENCHMARK_SERIES_MISSING = "benchmark_series_missing"
+BENCHMARK_WINDOW_NOT_COVERED = "benchmark_window_not_covered"
+BENCHMARK_PICK_UNTRACKABLE = "pick_untrackable"
+
+# 胜出率（跑赢基准的比例）的分母口径说明。
+BEAT_BASIS_TRACKABLE = "benchmark_comparable_trackable_picks"
+BEAT_BASIS_NONE = "no_comparable_picks"
 
 DEFAULT_TRACKING_DAYS = 60
 DEFAULT_MAX_RUNS = 500
@@ -415,6 +432,95 @@ def _compute_pick_performance(
     return base
 
 
+def _compute_benchmark_comparison(
+    row: Dict[str, Any],
+    *,
+    enabled: bool,
+    benchmark_code: Optional[str],
+    index_bars: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """按入选**自己的窗口**算基准收益与超额收益。
+
+    这是本模块最容易做错的地方：入选发生在不同日期，用同一个全局区间去比基准，
+    等于拿"今天的行情"去评判"三周前的选股"。因此基准区间严格对齐该入选自己的
+    窗口 —— 起点是入选日或之前最近的指数收盘（选股价就是入选日的快照价），
+    终点是该入选最新前瞻 K 线的日期或之前最近的指数收盘。
+
+    拿不到就如实报不可用并给出机器原因码：**绝不填 0**（0 会让"没数据"看起来像
+    "与大盘持平"），也**绝不悄悄换一个窗口**（换窗口得到的超额收益不再是这个
+    入选的）。
+    """
+    result: Dict[str, Any] = {
+        "benchmark_code": benchmark_code,
+        "benchmark_available": False,
+        "benchmark_reason": None,
+        "benchmark_start_date": None,
+        "benchmark_start_close": None,
+        "benchmark_end_date": None,
+        "benchmark_end_close": None,
+        "benchmark_return_pct": None,
+        "excess_return_pct": None,
+    }
+    if not enabled or not benchmark_code:
+        result["benchmark_reason"] = BENCHMARK_DISABLED if not enabled else BENCHMARK_SERIES_MISSING
+        return result
+    if not index_bars:
+        result["benchmark_reason"] = BENCHMARK_SERIES_MISSING
+        return result
+    if not row.get("trackable") or not row.get("latest_date"):
+        # 入选本身不可复盘 → 没有窗口可对齐，基准自然也无从谈起。
+        result["benchmark_reason"] = BENCHMARK_PICK_UNTRACKABLE
+        return result
+
+    pick_date = _coerce_date(row.get("pick_date"))
+    latest_date = _coerce_date(row.get("latest_date"))
+    if pick_date is None or latest_date is None:
+        result["benchmark_reason"] = BENCHMARK_WINDOW_NOT_COVERED
+        return result
+
+    start_bar = None
+    for bar in index_bars:  # index_bars 已按日期升序
+        if bar["date"] <= pick_date and bar.get("close") is not None:
+            start_bar = bar
+        elif bar["date"] > pick_date:
+            break
+    end_bar = None
+    for bar in index_bars:
+        if bar["date"] > latest_date:
+            break
+        if start_bar is not None and start_bar["date"] < bar["date"] and bar.get("close") is not None:
+            end_bar = bar
+    if start_bar is None or end_bar is None:
+        # 起点或终点落在指数序列覆盖范围之外：说清楚是哪一段缺，而不是退回 0。
+        result["benchmark_reason"] = BENCHMARK_WINDOW_NOT_COVERED
+        return result
+
+    start_close = float(start_bar["close"])
+    end_close = float(end_bar["close"])
+    if start_close <= 0:
+        result["benchmark_reason"] = BENCHMARK_WINDOW_NOT_COVERED
+        return result
+
+    benchmark_return_pct = (end_close - start_close) / start_close * 100.0
+    pick_return_pct = _coerce_float(row.get("return_pct"))
+    result.update(
+        {
+            "benchmark_available": True,
+            "benchmark_start_date": start_bar["date"].isoformat(),
+            "benchmark_start_close": _round(start_close, 4),
+            "benchmark_end_date": end_bar["date"].isoformat(),
+            "benchmark_end_close": _round(end_close, 4),
+            "benchmark_return_pct": _round(benchmark_return_pct),
+            "excess_return_pct": (
+                _round(pick_return_pct - benchmark_return_pct)
+                if pick_return_pct is not None
+                else None
+            ),
+        }
+    )
+    return result
+
+
 def _aggregate(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     """聚合一组入选。
 
@@ -427,6 +533,22 @@ def _aggregate(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     days = [row["days_held"] for row in trackable if row.get("days_held") is not None]
     hits = [value for value in returns if value > 0]
 
+    # 基准对比只能统计"有基准且窗口被覆盖"的那些入选。分母单独给出，
+    # 因为"跑赢比例 80%"在 5 个样本和 50 个样本上完全不是一回事。
+    comparable = [
+        row for row in trackable if row.get("excess_return_pct") is not None
+    ]
+    benchmark_returns = [
+        row["benchmark_return_pct"] for row in comparable if row.get("benchmark_return_pct") is not None
+    ]
+    excess = [row["excess_return_pct"] for row in comparable]
+    beats = [value for value in excess if value > 0]
+    benchmark_reason_counts: Dict[str, int] = {}
+    for row in trackable:
+        reason = row.get("benchmark_reason")
+        if reason:
+            benchmark_reason_counts[reason] = benchmark_reason_counts.get(reason, 0) + 1
+
     aggregate: Dict[str, Any] = {
         "picks": len(rows),
         "trackable": len(trackable),
@@ -438,26 +560,59 @@ def _aggregate(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "best_return_pct": _round(max(returns)) if returns else None,
         "worst_return_pct": _round(min(returns)) if returns else None,
         "avg_days_held": _round(sum(days) / len(days), 1) if days else None,
+        # === 同期基准对比（每只入选用自己的窗口）===
+        "benchmark_code": next(
+            (row.get("benchmark_code") for row in rows if row.get("benchmark_code")), None
+        ),
+        "benchmark_comparable": len(comparable),
+        "beat_benchmark_rate": _round(len(beats) / len(excess), 4) if excess else None,
+        # 与 hit_rate_basis 同一套写法：分母口径是可读契约，必须显式给出。
+        "beat_benchmark_basis": BEAT_BASIS_TRACKABLE if excess else BEAT_BASIS_NONE,
+        "beat_benchmark_denominator": len(excess),
+        "avg_benchmark_return_pct": (
+            _round(sum(benchmark_returns) / len(benchmark_returns)) if benchmark_returns else None
+        ),
+        "median_benchmark_return_pct": _round(median(benchmark_returns)) if benchmark_returns else None,
+        "avg_excess_return_pct": _round(sum(excess) / len(excess)) if excess else None,
+        "median_excess_return_pct": _round(median(excess)) if excess else None,
+        "benchmark_unavailable_reasons": [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(
+                benchmark_reason_counts.items(), key=lambda item: (-item[1], item[0])
+            )
+        ],
     }
     return aggregate
 
 
-def _probe_benchmark(db_manager: Any) -> Dict[str, Any]:
-    """检查是否真的存在可用的基准序列。
+def _probe_benchmark(db_manager: Any, *, config: Any = None) -> Dict[str, Any]:
+    """检查是否真的存在可用的基准序列，并确定用哪一条指数。
 
     复盘需要"同期基准"才能说清收益是选股能力还是大盘 beta。这里先查证再决定：
     不查就编一个"跑赢大盘 x%"正是本仓库要治的病。
+
+    ``code`` 是**实际**被用作基准的指数 canonical_id（配置里排第一且有本地 K 线的
+    那条），必须回传 —— 用户有权知道自己是拿沪深300 还是中证500 在比。
     """
     from sqlalchemy import text
 
     probe: Dict[str, Any] = {
         "available": False,
         "reason": "no_benchmark_series",
+        "code": None,
+        "codes_configured": [],
+        "window_basis": "per_pick_window",
         "index_series": [],
         "stock_daily_series_count": 0,
         "stock_daily_latest_date": None,
         "market_snapshot_dates": [],
     }
+    try:
+        from src.services.benchmark_index_service import resolve_benchmark_index_codes
+
+        probe["codes_configured"] = resolve_benchmark_index_codes(config)
+    except Exception:
+        logger.warning("[ScreeningTracking] 解析基准指数配置失败", exc_info=True)
     try:
         with db_manager.get_session() as session:
             canonical_rows = session.execute(
@@ -478,6 +633,15 @@ def _probe_benchmark(db_manager: Any) -> Dict[str, Any]:
     )
     probe["stock_daily_series_count"] = len(series)
     probe["index_series"] = [value for value in series if _INDEX_CANONICAL_PATTERN.match(value)]
+    # 先按配置顺序挑；配置的指数一条都没有时退回本地实际存在的指数（并在 code
+    # 里如实写明用的是哪条），而不是干脆不算 —— 有可比数据就比，用哪条必须说清。
+    available_series = set(probe["index_series"])
+    for candidate in probe["codes_configured"]:
+        if candidate in available_series:
+            probe["code"] = candidate
+            break
+    if probe["code"] is None and probe["index_series"]:
+        probe["code"] = probe["index_series"][0]
     if latest_row is not None:
         latest_value = (latest_row._mapping if hasattr(latest_row, "_mapping") else latest_row)["latest"]
         latest_date = _coerce_date(latest_value)
@@ -551,6 +715,25 @@ class ScreeningTrackingService:
                 )
             )
 
+        # === 同期基准对比 ===
+        # 先探测本地到底有哪条指数序列，再按每只入选**自己的窗口**取指数区间。
+        # 指数序列缺失时不补 0、不换窗口：每只入选都会带上 benchmark_reason。
+        benchmark_probe = _probe_benchmark(db, config=self.config)
+        benchmark_code = benchmark_probe.get("code")
+        benchmark_bars: Optional[List[Dict[str, Any]]] = None
+        if benchmark_code:
+            benchmark_bars = _fetch_forward_bars(db, [benchmark_code]).get(benchmark_code)
+        benchmark_enabled = bool(benchmark_probe.get("codes_configured"))
+        for row in rows:
+            row.update(
+                _compute_benchmark_comparison(
+                    row,
+                    enabled=benchmark_enabled,
+                    benchmark_code=benchmark_code,
+                    index_bars=benchmark_bars,
+                )
+            )
+
         # 列表按可复盘优先 + 收益从低到高（先看亏得最多的），不可复盘的按日期倒序垫底。
         trackable_rows = sorted(
             (row for row in rows if row["trackable"]),
@@ -589,7 +772,18 @@ class ScreeningTrackingService:
         latest_dates = sorted(
             row["latest_date"] for row in rows if row.get("latest_date")
         )
-        benchmark_probe = _probe_benchmark(db)
+        total = _aggregate(rows)
+        # 把"用哪条指数、有多少只可比"补进 benchmark 对象：原有字段语义一个不动，
+        # 只是不再停在 available=false 的占位状态。
+        benchmark_probe["comparable_picks"] = total["benchmark_comparable"]
+        benchmark_probe["avg_benchmark_return_pct"] = total["avg_benchmark_return_pct"]
+        benchmark_probe["median_benchmark_return_pct"] = total["median_benchmark_return_pct"]
+        benchmark_probe["avg_excess_return_pct"] = total["avg_excess_return_pct"]
+        benchmark_probe["median_excess_return_pct"] = total["median_excess_return_pct"]
+        benchmark_probe["beat_benchmark_rate"] = total["beat_benchmark_rate"]
+        benchmark_probe["beat_benchmark_basis"] = total["beat_benchmark_basis"]
+        benchmark_probe["beat_benchmark_denominator"] = total["beat_benchmark_denominator"]
+        benchmark_probe["unavailable_reasons"] = total["benchmark_unavailable_reasons"]
         return {
             "enabled": enabled,
             "window_days": resolved_days,
@@ -598,7 +792,7 @@ class ScreeningTrackingService:
                 "days": resolved_days,
                 "malformed_runs": malformed_runs,
             },
-            "total": _aggregate(rows),
+            "total": total,
             "strategies": strategies,
             "picks": ordered_rows,
             "untrackable": untrackable_rows,
@@ -616,6 +810,8 @@ class ScreeningTrackingService:
                 "return_pct = 最新收盘价相对选股时点价格的涨跌幅；取不到前瞻 K 线的入选计入 untrackable，不计入命中率分母。",
                 "同一交易日的 K 线不算前瞻收益（选股价格已是当日快照价）。",
                 "stock_daily 需要先刷新：STOCK_DAILY_REFRESH_ENABLED 打开后，刷新清单会覆盖最近选股入选。",
+                "excess_return_pct = 该入选自己的 return_pct 减去同期基准指数收益；基准区间随每只入选的窗口走（入选日 → 该入选最新前瞻 K 线日），不是全局统一的一个区间。",
+                "跑赢比例的分母只有 benchmark_comparable（既有可复盘收益、窗口又被指数覆盖的入选）；拿不到基准的入选单列 benchmark_reason，绝不按 0 超额计入。",
             ],
         }
 

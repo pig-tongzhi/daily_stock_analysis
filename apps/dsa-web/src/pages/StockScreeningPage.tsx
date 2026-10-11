@@ -42,6 +42,13 @@ import {
 import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
 import { AppPage, Button, InlineAlert, Select } from '../components/common';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
+import {
+  benchmarkIndexLabelKey,
+  formatRatePercent,
+  formatSignedPercent,
+  trackingBenchmarkReasonKey,
+  trackingReasonKey,
+} from './screeningTrackingDisplay';
 
 const MARKETS = [{ id: 'cn', label: 'A 股' }];
 // 复盘回看窗口。与后端 SCREENING_PICK_TRACKING_DAYS 的默认值保持一致；
@@ -926,35 +933,26 @@ const StockScreeningPage: React.FC = () => {
   const isScreeningEnabled = enabled && available;
   const statusText = isScreeningEnabled ? '选股已开启' : '选股未开启';
 
-  // 复盘区块的展示文案（原因码 → 本地化）。后端只返回机器可读的原因码。
-  const trackingReasonLabel = (reason: string | null | undefined): string => {
-    switch (reason) {
-      case 'missing_pick_price':
-        return t('screening.tracking.reason.missing_pick_price');
-      case 'unknown_identity':
-        return t('screening.tracking.reason.unknown_identity');
-      case 'no_daily_rows':
-        return t('screening.tracking.reason.no_daily_rows');
-      case 'no_forward_bars':
-        return t('screening.tracking.reason.no_forward_bars');
-      default:
-        return t('screening.tracking.reason.generic');
-    }
+  // 复盘区块的展示文案（原因码 → 本地化）。后端只返回机器可读的原因码，
+  // 映射集中在 screeningTrackingDisplay，便于用测试钉住契约。
+  const trackingReasonLabel = (reason: string | null | undefined): string => t(trackingReasonKey(reason));
+  const trackingBenchmarkLabel = (reason: string | null | undefined): string =>
+    t(trackingBenchmarkReasonKey(reason));
+  const trackingBenchmarkIndexName = (code: string | null | undefined): string => {
+    const key = benchmarkIndexLabelKey(code);
+    return key ? t(key) : String(code || '').trim();
   };
-  const trackingBenchmarkLabel = (reason: string | null | undefined): string => {
-    switch (reason) {
-      case 'market_snapshot_is_single_date_cross_section':
-        return t('screening.tracking.benchmark.reason.market_snapshot_is_single_date_cross_section');
-      case 'no_index_and_no_multi_date_snapshot':
-        return t('screening.tracking.benchmark.reason.no_index_and_no_multi_date_snapshot');
-      case 'benchmark_probe_failed':
-        return t('screening.tracking.benchmark.reason.benchmark_probe_failed');
-      case 'index_series_found':
-        return t('screening.tracking.benchmark.reason.index_series_found');
-      default:
-        return t('screening.tracking.benchmark.reason.no_benchmark_series');
-    }
-  };
+  // 基准"不可用"的两种来源要分开：
+  //  - 功能被关掉（codesConfigured 为空）→ 这是配置问题，即使本地有指数行也不算；
+  //  - 探测说没有可用序列 → 用后端给的原因码。
+  // 后端 benchmark.available 的语义是"本地有指数序列"，保持不变；这里只是展示层判断。
+  const trackingBenchmarkUnavailableReason = tracking
+    ? tracking.benchmark.codesConfigured.length === 0
+      ? 'benchmark_disabled'
+      : tracking.benchmark.available
+        ? null
+        : tracking.benchmark.reason
+    : null;
   const trackingFreshnessText = tracking
     ? tracking.dataFreshness.stockDailyLatestDate
       ? t('screening.tracking.freshness', { date: tracking.dataFreshness.stockDailyLatestDate })
@@ -2184,7 +2182,7 @@ const StockScreeningPage: React.FC = () => {
         ) : null}
         {tracking ? (
           <>
-            <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+            <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
               {[
                 { label: t('screening.tracking.metric.picks'), value: String(tracking.total.picks) },
                 { label: t('screening.tracking.metric.trackable'), value: String(tracking.total.trackable) },
@@ -2200,6 +2198,20 @@ const StockScreeningPage: React.FC = () => {
                   value: tracking.total.avgReturnPct == null
                     ? t('screening.tracking.noTrackableValue')
                     : formatTrackingPercent(tracking.total.avgReturnPct),
+                },
+                {
+                  // 相对基准的超额：这才是"选股有没有用"的答案。分母为 0 时显式说明，
+                  // 不显示成 +0.00%（那会被读成"与大盘持平"）。
+                  label: t('screening.tracking.metric.avgExcess'),
+                  value: tracking.total.avgExcessReturnPct == null
+                    ? t('screening.tracking.noTrackableValue')
+                    : formatSignedPercent(tracking.total.avgExcessReturnPct),
+                },
+                {
+                  label: t('screening.tracking.metric.beatRate'),
+                  value: tracking.total.beatBenchmarkRate == null
+                    ? t('screening.tracking.noTrackableValue')
+                    : formatRatePercent(tracking.total.beatBenchmarkRate, 0),
                 },
               ].map((item) => (
                 <div key={item.label} className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-2">
@@ -2250,6 +2262,8 @@ const StockScreeningPage: React.FC = () => {
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.trackable')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.hitRate')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.avgReturn')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.avgExcess')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.beatRate')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/60">
@@ -2268,6 +2282,14 @@ const StockScreeningPage: React.FC = () => {
                           <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(row.avgReturnPct)}`}>
                             {row.avgReturnPct == null ? '-' : formatTrackingPercent(row.avgReturnPct)}
                           </td>
+                          <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(row.avgExcessReturnPct)}`}>
+                            {row.avgExcessReturnPct == null ? '-' : formatSignedPercent(row.avgExcessReturnPct)}
+                          </td>
+                          <td className="py-2 pr-3 text-secondary-text">
+                            {row.beatBenchmarkRate == null
+                              ? '-'
+                              : `${formatRatePercent(row.beatBenchmarkRate, 0)} (${row.beatBenchmarkDenominator})`}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -2282,7 +2304,7 @@ const StockScreeningPage: React.FC = () => {
                   {t('screening.tracking.picksTable.title')}
                 </p>
                 <div className="max-h-80 overflow-y-auto">
-                  <table className="w-full min-w-[720px] text-left text-xs">
+                  <table className="w-full min-w-[840px] text-left text-xs">
                     <thead className="sticky top-0 bg-card/95 text-secondary-text">
                       <tr>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.name')}</th>
@@ -2290,6 +2312,7 @@ const StockScreeningPage: React.FC = () => {
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.pickPrice')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.latestClose')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.return')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.excess')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.maxDrawdown')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.daysHeld')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.status')}</th>
@@ -2311,6 +2334,13 @@ const StockScreeningPage: React.FC = () => {
                           </td>
                           <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(pick.returnPct)}`}>
                             {pick.trackable ? formatTrackingPercent(pick.returnPct) : '-'}
+                          </td>
+                          <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(pick.excessReturnPct)}`}>
+                            {pick.benchmarkAvailable
+                              ? formatSignedPercent(pick.excessReturnPct)
+                              : pick.trackable
+                                ? trackingBenchmarkLabel(pick.benchmarkReason)
+                                : '-'}
                           </td>
                           <td className={`py-2 pr-3 ${getTrackingReturnClassName(pick.maxDrawdownPct)}`}>
                             {pick.trackable ? formatTrackingPercent(pick.maxDrawdownPct) : '-'}
@@ -2335,12 +2365,51 @@ const StockScreeningPage: React.FC = () => {
               </div>
             ) : null}
 
-            {!tracking.benchmark.available ? (
+            {trackingBenchmarkUnavailableReason ? (
               <p className="mt-3 text-xs text-secondary-text">
                 {t('screening.tracking.benchmark.unavailable', {
-                  reason: trackingBenchmarkLabel(tracking.benchmark.reason),
+                  reason: trackingBenchmarkLabel(trackingBenchmarkUnavailableReason),
                 })}
               </p>
+            ) : null}
+
+            {!trackingBenchmarkUnavailableReason &&
+            tracking.benchmark.comparablePicks === 0 ? (
+              // 指数有了但一只能比的都没有：这是"有基准、无样本"，不是"跑平基准"。
+              <p className="mt-3 text-xs text-secondary-text">
+                {t('screening.tracking.benchmark.noComparable', {
+                  index: trackingBenchmarkIndexName(tracking.benchmark.code),
+                })}
+              </p>
+            ) : null}
+
+            {!trackingBenchmarkUnavailableReason &&
+            tracking.benchmark.comparablePicks > 0 ? (
+              <div className="mt-3 rounded-xl border border-border/60 bg-elevated/40 px-3 py-2">
+                <p className="text-xs text-foreground">
+                  {t('screening.tracking.benchmark.summary', {
+                    index: trackingBenchmarkIndexName(tracking.benchmark.code),
+                    benchmarkReturn: formatSignedPercent(tracking.benchmark.avgBenchmarkReturnPct),
+                    avgExcess: formatSignedPercent(tracking.benchmark.avgExcessReturnPct),
+                    beatRate: formatRatePercent(tracking.benchmark.beatBenchmarkRate, 0),
+                  })}
+                </p>
+                <p className="mt-1 text-[11px] text-secondary-text">
+                  {t('screening.tracking.benchmark.summaryBasis', {
+                    denominator: tracking.benchmark.beatBenchmarkDenominator,
+                  })}
+                </p>
+                <p className="mt-0.5 text-[11px] text-secondary-text">
+                  {t('screening.tracking.benchmark.windowBasis')}
+                </p>
+                {tracking.benchmark.unavailableReasons.length > 0 ? (
+                  <p className="mt-0.5 text-[11px] text-secondary-text">
+                    {tracking.benchmark.unavailableReasons
+                      .map((item) => `${trackingBenchmarkLabel(item.reason)} ${item.count}`)
+                      .join(' · ')}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </>
         ) : null}
