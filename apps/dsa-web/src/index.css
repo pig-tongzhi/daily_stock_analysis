@@ -223,7 +223,9 @@
   --settings-primary-border: hsl(var(--primary) / 0.26);
   --settings-primary-gradient:
     linear-gradient(135deg, hsl(var(--primary) / 0.96), hsl(var(--primary) / 0.96));
-  --settings-primary-text: hsl(var(--primary));
+  /* 修：原先与背景同为 hsl(var(--primary))，导致主按钮【蓝底蓝字、标签不可见】。
+     改用 primary-foreground（亮色近白、暗色近黑），与背景形成对比。 */
+  --settings-primary-text: hsl(var(--primary-foreground));
   --settings-primary-shadow: hsl(var(--primary) / 0.2);
   --settings-primary-shadow-hover: hsl(var(--primary) / 0.22);
   --settings-secondary-border: hsl(var(--border) / 0.96);
@@ -488,7 +490,9 @@
   --settings-primary-border: hsl(var(--primary) / 0.26);
   --settings-primary-gradient:
     linear-gradient(135deg, hsl(var(--primary) / 0.96), hsl(var(--primary) / 0.96));
-  --settings-primary-text: hsl(var(--primary));
+  /* 修：原先与背景同为 hsl(var(--primary))，导致主按钮【蓝底蓝字、标签不可见】。
+     改用 primary-foreground（亮色近白、暗色近黑），与背景形成对比。 */
+  --settings-primary-text: hsl(var(--primary-foreground));
   --settings-primary-shadow: hsl(var(--primary) / 0.2);
   --settings-primary-shadow-hover: hsl(var(--primary) / 0.22);
   --settings-secondary-border: hsl(0 0% 100% / 0.08);

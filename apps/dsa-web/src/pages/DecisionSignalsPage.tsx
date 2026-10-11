@@ -9,21 +9,29 @@ import { getParsedApiError, type ParsedApiError } from '../api/error';
 import { historyApi } from '../api/history';
 import {
   ApiErrorAlert,
-  AppPage,
-  Card,
   ConfirmDialog,
   Drawer,
-  EmptyState,
   InlineAlert,
-  PageHeader,
   Pagination,
 } from '../components/common';
-import {
-  DecisionSignalCard,
-  DecisionSignalDetails,
-} from '../components/decision-signals/DecisionSignalDisplay';
+import { DecisionSignalDetails } from '../components/decision-signals/DecisionSignalDisplay';
 import { DecisionSignalProfileCalibration } from '../components/decision-signals/DecisionSignalProfileCalibration';
 import { DecisionSignalTimeline } from '../components/decision-signals/DecisionSignalTimeline';
+// 页面容器、指标小块、空态统一走首页那套 playful 基元，本页不再自己拼类名串。
+// 信号卡片用的是本页新增的 playful 版本：不改共享的 DecisionSignalDisplay，
+// 因为持仓页仍在引用同一个文件里的 PortfolioSignalSummary。
+import {
+  PlayfulCard,
+  PlayfulEmptyState,
+  PlayfulMascot,
+  PlayfulPage,
+  PlayfulSection,
+  PlayfulSectionTitle,
+  PlayfulStat,
+  PlayfulStatGrid,
+  PlayfulTrack,
+} from '../components/playful';
+import { PlayfulDecisionSignalCard } from '../components/decision-signals/PlayfulDecisionSignalCard';
 import { StockAutocomplete } from '../components/StockAutocomplete';
 import { StockProfilePanel } from '../components/stock-profile/StockProfilePanel';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
@@ -1008,7 +1016,7 @@ const DecisionSignalsPage: React.FC = () => {
     const finalAction = typeof guardrail?.final_action === 'string' ? guardrail.final_action : null;
     const passed = typeof guardrail?.passed === 'boolean' ? guardrail.passed : null;
     return (
-      <div className="rounded-xl border border-border/60 bg-elevated/30 p-4">
+      <div className="rounded-2xl border border-[var(--playful-line)] bg-[var(--playful-surface-soft)] p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <div className="flex items-center gap-2">
@@ -1195,29 +1203,40 @@ const DecisionSignalsPage: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <AppPage>
-      <div className="space-y-5">
-        <PageHeader
-          eyebrow={t('decisionSignals.activeOnly')}
-          title={t('decisionSignals.title')}
-          description={t('decisionSignals.description')}
-          actions={(
-            <button
-              type="button"
-              className="btn-secondary inline-flex items-center gap-2"
-              onClick={() => {
-                void loadSignals();
-                void loadOutcomeStats();
-              }}
-              disabled={loading}
-            >
-              <RefreshCw className={cn('h-4 w-4', loading ? 'animate-spin' : '')} />
-              {t('decisionSignals.refresh')}
-            </button>
-          )}
-        />
+    <PlayfulPage className="space-y-4 pb-10 pt-4 md:pt-6">
+      <PlayfulSection>
+        {/* 顶部问候条与首页/持仓页同构：吉祥物 + 标题 + 主操作。
+            标题仍是 h1，页面标题的可访问名保持「AI 建议」不变。 */}
+        <PlayfulCard variant="hero" padding="none" className="flex flex-wrap items-center gap-4 px-5 py-4">
+          <PlayfulMascot className="h-[72px] w-[104px] shrink-0" />
+          <div className="min-w-[12rem] flex-1">
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] playful-ink-soft">
+              {t('decisionSignals.activeOnly')}
+            </p>
+            <h1 className="mt-1 text-xl font-extrabold tracking-tight text-foreground md:text-2xl">
+              {t('decisionSignals.title')}
+            </h1>
+            <p className="mt-1 text-xs font-semibold playful-ink-soft">{t('decisionSignals.description')}</p>
+          </div>
+          <button
+            type="button"
+            className="btn-secondary inline-flex items-center gap-2"
+            onClick={() => {
+              void loadSignals();
+              void loadOutcomeStats();
+            }}
+            disabled={loading}
+          >
+            <RefreshCw className={cn('h-4 w-4', loading ? 'animate-spin' : '')} />
+            {t('decisionSignals.refresh')}
+          </button>
+        </PlayfulCard>
 
-        <Card title={t('decisionSignals.stockContextTitle')} subtitle={t('decisionSignals.stockContextDescription')} padding="md">
+        <PlayfulCard>
+          <PlayfulSectionTitle emoji="🔍" as="h2" title={t('decisionSignals.stockContextTitle')} />
+          <p className="mt-1 text-xs leading-5 playful-ink-soft">
+            {t('decisionSignals.stockContextDescription')}
+          </p>
           <form
             className="flex flex-col gap-3 md:flex-row"
             onSubmit={(event) => {
@@ -1285,7 +1304,7 @@ const DecisionSignalsPage: React.FC = () => {
           ) : historyCandidatesLoaded ? (
             <p className="mt-4 text-sm text-secondary-text">{t('decisionSignals.stockContextNoCandidates')}</p>
           ) : null}
-        </Card>
+        </PlayfulCard>
 
         {/* 用户在这个页面输入股票的本意是「查这只票」，所以紧贴输入框下方立刻给出这只
             股票的画像；否则一只从未分析过的股票（如 002567 唐人神）会让整页看不到任何
@@ -1297,8 +1316,9 @@ const DecisionSignalsPage: React.FC = () => {
           />
         ) : null}
 
-        <Card padding="md">
-          <form className="grid gap-3 md:grid-cols-3 xl:grid-cols-7" onSubmit={handleApplyFilters}>
+        <PlayfulCard>
+          <PlayfulSectionTitle emoji="🧰" as="h2" title={t('decisionSignalsPage.filtersTitle')} />
+          <form className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-7" onSubmit={handleApplyFilters}>
             <select
               className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
               value={filters.market}
@@ -1375,66 +1395,104 @@ const DecisionSignalsPage: React.FC = () => {
               {t('decisionSignals.filter')}
             </button>
           </form>
-        </Card>
+        </PlayfulCard>
 
         {!selected && appliedSourceReportId ? (
-          <Card padding="md">
+          <PlayfulCard>
             {renderReassessPanel()}
-          </Card>
+          </PlayfulCard>
         ) : null}
 
-        <Card title={t('decisionSignals.statsTitle')} subtitle={t('decisionSignals.statsDescription')} padding="md">
-          <p className="mb-3 text-sm text-secondary-text">{t('decisionSignals.statsGlobalScope')}</p>
+        <PlayfulCard as="section">
+          <PlayfulSectionTitle emoji="📊" as="h2" title={t('decisionSignals.statsTitle')} />
+          <p className="mt-1 text-xs leading-5 playful-ink-soft">{t('decisionSignals.statsDescription')}</p>
+          {/* 统计口径常驻可见：这是全局已复盘 outcome 口径，不等于当前可见信号数量 */}
+          <p className="mt-1 text-[11px] font-semibold leading-5 playful-ink-soft">
+            {t('decisionSignals.statsGlobalScope')}
+          </p>
           {statsError ? (
             <ApiErrorAlert
+              className="mt-3"
               error={{ ...statsError, title: t('decisionSignals.statsErrorTitle') }}
               actionLabel={t('common.retry')}
               onAction={() => void loadOutcomeStats()}
             />
           ) : statsLoading ? (
-            <p className="text-sm text-secondary-text">{t('common.loading')}...</p>
+            <p className="mt-3 text-sm playful-ink-soft">{t('common.loading')}...</p>
           ) : outcomeStats && outcomeStats.total > 0 ? (
             <div>
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.statsTotal')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-foreground">{outcomeStats.total}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.statsHitRate')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-success">{formatStatPercent(outcomeStats.hitRatePct)}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.outcome.hit')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-success">{outcomeStats.hit}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.outcome.miss')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-danger">{outcomeStats.miss}</p>
-                </div>
-                <div className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-3">
-                  <p className="text-xs text-secondary-text">{t('decisionSignals.outcome.unable')}</p>
-                  <p className="mt-1 text-2xl font-semibold text-warning">{outcomeStats.unable}</p>
-                </div>
-              </div>
+              <PlayfulStatGrid className="mt-3">
+                <PlayfulStat label={t('decisionSignals.statsTotal')} value={outcomeStats.total} tone="ink" />
+                <PlayfulStat
+                  label={t('decisionSignals.statsHitRate')}
+                  value={formatStatPercent(outcomeStats.hitRatePct)}
+                  tone="grape"
+                />
+                <PlayfulStat
+                  label={t('decisionSignals.outcome.hit')}
+                  value={outcomeStats.hit}
+                  className="[&>b]:text-success"
+                />
+                <PlayfulStat
+                  label={t('decisionSignals.outcome.miss')}
+                  value={outcomeStats.miss}
+                  className="[&>b]:text-danger"
+                />
+                <PlayfulStat
+                  label={t('decisionSignals.outcome.unable')}
+                  value={outcomeStats.unable}
+                  className="[&>b]:text-warning"
+                />
+              </PlayfulStatGrid>
+              {/* 命中率条形只在真有分母时画：没有可计算样本时空条会被读成 0% */}
+              {outcomeStats.hitRatePct === null || outcomeStats.hitRatePct === undefined ? null : (
+                <PlayfulTrack
+                  as="div"
+                  size="md"
+                  tone="grape"
+                  className="mt-3 w-full"
+                  value={Math.max(0, Math.min(100, outcomeStats.hitRatePct))}
+                />
+              )}
+              {/* 命中率口径常驻可见：分母 = 命中 + 未命中；中性样本与无法评估都不进分母。
+                  分母为 0 时直接说明「暂无可计算样本」，绝不显示成 0%。 */}
+              <p className="mt-1.5 text-[11px] font-semibold leading-5 playful-ink-soft">
+                {outcomeStats.hitRatePct === null || outcomeStats.hitRatePct === undefined
+                  ? t('decisionSignalsPage.hitRateUnavailable', {
+                    hit: outcomeStats.hit,
+                    miss: outcomeStats.miss,
+                  })
+                  : t('decisionSignalsPage.hitRateBasis', {
+                    hit: outcomeStats.hit,
+                    miss: outcomeStats.miss,
+                    neutral: outcomeStats.neutral,
+                    unable: outcomeStats.unable,
+                  })}
+              </p>
               {outcomeStats.profileCalibration ? (
                 <DecisionSignalProfileCalibration calibration={outcomeStats.profileCalibration} />
               ) : null}
             </div>
           ) : (
-            <EmptyState
-              className="border-none bg-transparent py-6 shadow-none"
+            <PlayfulEmptyState
+              className="mt-3"
               title={t('decisionSignals.noReviewedStatsTitle')}
               description={t('decisionSignals.noReviewedStatsDescription')}
               icon={<BarChart3 className="h-6 w-6" />}
             />
           )}
-        </Card>
+        </PlayfulCard>
 
-        <Card title={t('decisionSignals.latestTitle')} subtitle={t('decisionSignals.latestDescription')} padding="md">
+        <PlayfulCard as="section">
+          <PlayfulSectionTitle
+            emoji="🎯"
+            as="h2"
+            title={t('decisionSignals.latestTitle')}
+          />
+          <p className="mt-1 text-xs leading-5 playful-ink-soft">{t('decisionSignals.latestDescription')}</p>
           {!activeStockContext ? (
-            <EmptyState
-              className="border-none bg-transparent py-6 shadow-none"
+            <PlayfulEmptyState
+              className="mt-3"
               title={t('decisionSignals.stockContextGuideTitle')}
               description={t('decisionSignals.stockContextGuideDescription')}
               icon={<Activity className="h-6 w-6" />}
@@ -1446,26 +1504,26 @@ const DecisionSignalsPage: React.FC = () => {
             // 「没有 active 信号」。后者下方时间线明明列着历史记录，上面却说没有，
             // 自相矛盾，用户据此以为查询失败。
             hasTimelineHistory ? (
-              <EmptyState
-                className="mt-4 border-none bg-transparent py-6 shadow-none"
+              <PlayfulEmptyState
+                className="mt-3"
                 title={t('decisionSignals.noLatestTitle')}
                 description={t('decisionSignals.noLatestDescription')}
                 icon={<Activity className="h-6 w-6" />}
               />
             ) : (
-              <EmptyState
-                className="mt-4 border-none bg-transparent py-6 shadow-none"
+              <PlayfulEmptyState
+                className="mt-3"
                 title={t('decisionSignals.neverHadSignalTitle')}
                 description={t('decisionSignals.neverHadSignalDescription')}
                 icon={<Activity className="h-6 w-6" />}
               />
             )
           ) : null}
-          {latestLoading ? <p className="mt-3 text-sm text-secondary-text">{t('common.loading')}...</p> : null}
+          {latestLoading ? <p className="mt-3 text-sm playful-ink-soft">{t('common.loading')}...</p> : null}
           {latestItems.length > 0 ? (
-            <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
               {latestItems.map((item) => (
-                <DecisionSignalCard
+                <PlayfulDecisionSignalCard
                   key={item.id}
                   item={item}
                   onSelect={(selectedItem) => setSelected({ source: 'latest', item: selectedItem })}
@@ -1474,10 +1532,12 @@ const DecisionSignalsPage: React.FC = () => {
               ))}
             </div>
           ) : null}
-        </Card>
+        </PlayfulCard>
 
-        <Card title={t('decisionSignals.timelineTitle')} subtitle={t('decisionSignals.timelineDescription')} padding="md">
-          <form className="grid gap-3 md:grid-cols-5" onSubmit={handleTimelineSearch}>
+        <PlayfulCard as="section">
+          <PlayfulSectionTitle emoji="📈" as="h2" title={t('decisionSignals.timelineTitle')} />
+          <p className="mt-1 text-xs leading-5 playful-ink-soft">{t('decisionSignals.timelineDescription')}</p>
+          <form className="mt-3 grid gap-3 md:grid-cols-5" onSubmit={handleTimelineSearch}>
             <select
               className="input-surface input-focus-glow h-11 rounded-xl border bg-transparent px-3 text-sm"
               value={timelineFilters.market}
@@ -1540,8 +1600,7 @@ const DecisionSignalsPage: React.FC = () => {
           </form>
           <div className="mt-4">
             {!timelineSearched ? (
-              <EmptyState
-                className="border-none bg-transparent py-6 shadow-none"
+              <PlayfulEmptyState
                 title={activeStockContext ? t('decisionSignals.timelineGuideTitle') : t('decisionSignals.stockContextGuideTitle')}
                 description={activeStockContext ? t('decisionSignals.timelineGuideDescription') : t('decisionSignals.stockContextGuideDescription')}
                 icon={<Activity className="h-6 w-6" />}
@@ -1557,42 +1616,55 @@ const DecisionSignalsPage: React.FC = () => {
               />
             )}
           </div>
-        </Card>
+        </PlayfulCard>
 
-        {error ? (
-          <ApiErrorAlert
-            error={{ ...error, title: t('decisionSignals.errorTitle') }}
-            actionLabel={t('common.retry')}
-            onAction={() => void loadSignals()}
+        {/* 信号列表：查询结果的主体，单独成卡，错误与分页都放在卡内，
+            失败时不会只剩一条悬空告警，标题右侧常驻总数口径。 */}
+        <PlayfulCard as="section">
+          <PlayfulSectionTitle
+            emoji="📋"
+            as="h2"
+            title={t('decisionSignalsPage.listTitle')}
+            meta={t('decisionSignals.total', { total })}
           />
-        ) : null}
-
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm text-secondary-text">{t('decisionSignals.total', { total })}</p>
-          {loading ? <span className="text-xs text-secondary-text">{t('common.loading')}...</span> : null}
-        </div>
-
-        {!loading && items.length === 0 ? (
-          <EmptyState
-            title={t('decisionSignals.emptyTitle')}
-            description={t('decisionSignals.emptyDescription')}
-            icon={<Activity className="h-7 w-7" />}
+          {loading ? (
+            <p className="mt-1 text-[11px] font-semibold playful-ink-soft">{t('common.loading')}...</p>
+          ) : null}
+          {error ? (
+            <ApiErrorAlert
+              className="mt-3"
+              error={{ ...error, title: t('decisionSignals.errorTitle') }}
+              actionLabel={t('common.retry')}
+              onAction={() => void loadSignals()}
+            />
+          ) : null}
+          {!loading && items.length === 0 ? (
+            <PlayfulEmptyState
+              className="mt-3"
+              title={t('decisionSignals.emptyTitle')}
+              description={t('decisionSignals.emptyDescription')}
+              icon={<Activity className="h-7 w-7" />}
+            />
+          ) : (
+            <div className="mt-3 grid gap-3 xl:grid-cols-2">
+              {items.map((item) => (
+                <PlayfulDecisionSignalCard
+                  key={item.id}
+                  item={item}
+                  onSelect={(selectedItem) => setSelected({ source: 'list', item: selectedItem })}
+                  selected={selected?.item.id === item.id}
+                />
+              ))}
+            </div>
+          )}
+          <Pagination
+            className="mt-4"
+            currentPage={page}
+            totalPages={totalPages}
+            onPageChange={setPage}
           />
-        ) : (
-          <div className="grid gap-3 xl:grid-cols-2">
-            {items.map((item) => (
-              <DecisionSignalCard
-                key={item.id}
-                item={item}
-                onSelect={(selectedItem) => setSelected({ source: 'list', item: selectedItem })}
-                selected={selected?.item.id === item.id}
-              />
-            ))}
-          </div>
-        )}
-
-        <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
-      </div>
+        </PlayfulCard>
+      </PlayfulSection>
 
       <Drawer
         isOpen={Boolean(selected)}
@@ -1663,7 +1735,7 @@ const DecisionSignalsPage: React.FC = () => {
         onConfirm={() => void handleStatusUpdate()}
         onCancel={() => setPendingStatus(null)}
       />
-    </AppPage>
+    </PlayfulPage>
   );
 };
 

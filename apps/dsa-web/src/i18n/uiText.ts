@@ -124,6 +124,11 @@ const zh = {
   'intelligence.summary.none': '（无摘要）',
   'intelligence.showSummary': '展开摘要',
   'intelligence.hideSummary': '收起摘要',
+  // 资讯页 playful 改造新增文案：只追加自己的 newsPage.* 前缀，不触碰其它页面的 key。
+  'newsPage.overview.title': '资讯概览',
+  'newsPage.filter.title': '筛选条件',
+  'newsPage.list.rankLabel': '第 {index} 条资讯',
+  'newsPage.overview.marketsNote': '本页涉及市场：{markets}',
 
   'usage.breakdown': 'Breakdown',
   'usage.callType.agent': '问股 Agent',
@@ -1302,6 +1307,15 @@ const zh = {
   'portfolioPage.summaryTitle': '组合概览',
   'portfolioPage.summaryMeta': '计价币种 {currency}',
   'portfolioPage.totalUnrealizedPnl': '未实现盈亏合计',
+  // AI 建议页 playful 改造新增文案：只追加自己的 decisionSignalsPage.* 前缀，不触碰其它页面的 key。
+  'decisionSignalsPage.filtersTitle': '查询条件',
+  'decisionSignalsPage.listTitle': '信号列表',
+  // 命中率必须带口径：分母只含命中 + 未命中，中性与无法评估都不进分母。
+  'decisionSignalsPage.hitRateBasis': '命中率口径：命中 {hit} ÷ (命中 {hit} + 未命中 {miss})；中性 {neutral} 与无法评估 {unable} 不计入分母。',
+  // 分母为 0 时直接说明「暂无可计算」，绝不显示成 0%。
+  'decisionSignalsPage.hitRateUnavailable': '命中 {hit} 条、未命中 {miss} 条，合计为 0，暂无可计算的命中率。',
+  // 设置页 playful 改造新增文案：只追加自己的 settingsPage.* 前缀，不触碰其它页面的 key。
+  'settingsPage.unsavedChanges': '待保存 {count} 项',
 } as const;
 
 export type UiTextKey = keyof typeof zh;
@@ -1430,6 +1444,11 @@ const en: Record<UiTextKey, string> = {
   'intelligence.summary.none': '(no summary)',
   'intelligence.showSummary': 'Show summary',
   'intelligence.hideSummary': 'Hide summary',
+  // Playful intelligence page copy. Appended under the newsPage.* prefix only.
+  'newsPage.overview.title': 'Overview',
+  'newsPage.filter.title': 'Filters',
+  'newsPage.list.rankLabel': 'Intelligence item {index}',
+  'newsPage.overview.marketsNote': 'Markets on this page: {markets}',
 
   'usage.breakdown': 'Breakdown',
   'usage.callType.agent': 'Ask Agent',
@@ -2606,6 +2625,13 @@ const en: Record<UiTextKey, string> = {
   'portfolioPage.summaryTitle': 'Portfolio overview',
   'portfolioPage.summaryMeta': 'Currency {currency}',
   'portfolioPage.totalUnrealizedPnl': 'Total unrealized P/L',
+  // Playful AI-signals page copy. Appended under the decisionSignalsPage.* prefix only.
+  'decisionSignalsPage.filtersTitle': 'Filters',
+  'decisionSignalsPage.listTitle': 'Signal list',
+  'decisionSignalsPage.hitRateBasis': 'Hit rate basis: hits {hit} / (hits {hit} + misses {miss}); {neutral} neutral and {unable} unable samples stay out of the denominator.',
+  'decisionSignalsPage.hitRateUnavailable': '{hit} hits and {miss} misses add up to 0, so no hit rate can be computed yet.',
+  // Playful settings page copy. Appended under the settingsPage.* prefix only.
+  'settingsPage.unsavedChanges': '{count} unsaved',
 };
 
 export const UI_TEXT: Record<UiLanguage, Record<UiTextKey, string>> = {

@@ -1045,6 +1045,25 @@ describe('SettingsPage', () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it('shows the unsaved draft count in the playful header when drafts exist', () => {
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ hasDirty: true, dirtyCount: 2 }));
+
+    renderSettingsPage();
+
+    // hero 里的胶囊只是既有 dirty 状态的另一种呈现，不参与保存逻辑
+    expect(screen.getByText('待保存 2 项')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /保存配置/ })).toBeInTheDocument();
+  });
+
+  it('hides the unsaved draft chip when there is nothing to save', () => {
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState());
+
+    renderSettingsPage();
+
+    expect(screen.queryByText(/待保存 \d+ 项/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存配置' })).toBeInTheDocument();
+  });
+
   it('shows deep research and event monitor fields in the agent category when available', () => {
     useSystemConfigMock.mockReturnValue(buildSystemConfigState({
       activeCategory: 'agent',

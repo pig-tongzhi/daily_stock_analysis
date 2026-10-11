@@ -1,6 +1,29 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, CircleAlert, CircleDashed, Clock, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  Archive,
+  Bell,
+  Bot,
+  CheckCircle2,
+  ChevronDown,
+  CircleAlert,
+  CircleDashed,
+  Clock,
+  Cpu,
+  Database,
+  Layers3,
+  LineChart,
+  ListChecks,
+  Play,
+  Plus,
+  RefreshCw,
+  Settings2,
+  SlidersHorizontal,
+  Sparkles,
+  Tag,
+  Target,
+  Trash2,
+} from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { useAuth, useDesktopUpdate, useSystemConfig } from '../hooks';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
@@ -9,6 +32,15 @@ import { analysisApi } from '../api/analysis';
 import { screeningApi, notifyScreeningConfigChanged, notifySystemConfigChanged } from '../api/screening';
 import { systemConfigApi } from '../api/systemConfig';
 import { ApiErrorAlert, Button, ConfirmDialog, EmptyState } from '../components/common';
+// 卡通友好（playful）基元：与首页 / 组合 / 选股页共用同一套卡片、区块标题与暖色令牌。
+import {
+  PlayfulCard,
+  PlayfulChip,
+  PlayfulMascot,
+  PlayfulPage,
+  PlayfulSection,
+  PlayfulSectionTitle,
+} from '../components/playful';
 import {
   AgentBackendStatusPanel,
   AuthSettingsCard,
@@ -22,7 +54,6 @@ import {
   SettingsField,
   SettingsLoading,
   SettingsPanelErrorBoundary,
-  SettingsSectionCard,
 } from '../components/settings';
 import { WEB_BUILD_INFO } from '../utils/constants';
 import { parseStockListValue } from '../utils/stockList';
@@ -185,6 +216,58 @@ function getSetupCheckStatusLabel(
   return t('settings.setupStatusOptional');
 }
 
+/**
+ * 当前分类面板的图标：与左侧分类导航用同一套 lucide 线型。
+ *
+ * 这里刻意用线型图标而不是 emoji —— 设置页是拿来「读」的，图标只需要帮人
+ * 快速定位分组，不参与表达情绪；emoji 只出现在页面级 hero（吉祥物）和状态胶囊上。
+ */
+const ACTIVE_PANEL_ICONS: Partial<Record<SystemConfigCategory, React.ReactNode>> = {
+  system: <Settings2 className="h-4 w-4" />,
+  base: <SlidersHorizontal className="h-4 w-4" />,
+  data_source: <Database className="h-4 w-4" />,
+  ai_model: <Layers3 className="h-4 w-4" />,
+  notification: <Bell className="h-4 w-4" />,
+  agent: <Bot className="h-4 w-4" />,
+  backtest: <LineChart className="h-4 w-4" />,
+};
+
+interface SettingsGroupCardProps {
+  title: React.ReactNode;
+  description?: React.ReactNode;
+  /** 分组图标，只挂在区块标题上；字段级一律不加装饰。 */
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}
+
+/**
+ * 页面私有的设置分组卡。
+ *
+ * 为什么不直接用 `components/settings` 里的 `SettingsSectionCard`：那个组件被
+ * 认证 / 密码 / 通知等多个面板共用，而本次任务的文件所有权只允许改本页面，
+ * 所以在页面内用 playful 基元重组成一份等价结构 —— 外层依然是
+ * 「section + h2 标题 + 说明 + 内容」，`closest('section')`、标题层级和既有
+ * 测试断言都不受影响，只是把卡片表面换成暖色描边 + 大圆角 + 贴纸感投影。
+ */
+const SettingsGroupCard: React.FC<SettingsGroupCardProps> = ({
+  title,
+  description,
+  icon,
+  children,
+  className = '',
+}) => (
+  // padding 用 none + 显式 p-4/md:p-5，保持与 SettingsSectionCard 完全一致的内边距，
+  // 避免「换了皮肤但表单整体位移」这种与视觉无关的副作用。
+  <PlayfulCard as="section" padding="none" className={`p-4 md:p-5 ${className}`}>
+    <div className="mb-4 min-w-0 space-y-1">
+      <PlayfulSectionTitle as="h2" icon={icon} title={title} />
+      {description ? <p className="text-sm leading-6 text-muted-text">{description}</p> : null}
+    </div>
+    <div className="space-y-4">{children}</div>
+  </PlayfulCard>
+);
+
 type FirstRunSetupCardProps = {
   status: SetupStatusResponse | null;
   isLoading: boolean;
@@ -240,27 +323,27 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
 
   if (isHidden) {
     return (
-      <div className="rounded-2xl border settings-border bg-card/90 px-4 py-3 shadow-soft-card">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-foreground">{t('settings.setupGuideHiddenTitle')}</p>
-            <p className="mt-1 text-xs leading-5 text-muted-text">{t('settings.setupGuideHiddenDescription')}</p>
-          </div>
-          <Button type="button" variant="settings-secondary" size="sm" onClick={() => setIsHidden(false)}>
-            {t('settings.setupGuideOpen')}
-          </Button>
+      // 折叠态是独立的一条提示带，不再套分组卡，只借用同一套暖色表面。
+      <div className="playful-card-soft flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-semibold text-foreground">{t('settings.setupGuideHiddenTitle')}</p>
+          <p className="mt-1 text-xs leading-5 text-muted-text">{t('settings.setupGuideHiddenDescription')}</p>
         </div>
+        <Button type="button" variant="settings-secondary" size="sm" onClick={() => setIsHidden(false)}>
+          {t('settings.setupGuideOpen')}
+        </Button>
       </div>
     );
   }
 
   return (
-    <SettingsSectionCard
+    <SettingsGroupCard
       title={t('settings.setupGuideTitle')}
       description={t('settings.setupGuideDescription')}
+      icon={<ListChecks className="h-4 w-4" />}
     >
       <div data-testid="first-run-setup-card" className="space-y-4">
-        <div className="flex flex-col gap-3 rounded-2xl border settings-border bg-background/35 px-4 py-4 md:flex-row md:items-start md:justify-between">
+        <div className="playful-card-soft flex flex-col gap-3 px-4 py-4 md:flex-row md:items-start md:justify-between">
           <div className="min-w-0">
             <p className="text-sm font-semibold text-foreground">
               {summaryTitle}
@@ -299,16 +382,18 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
             {status.checks.map((check) => (
               <div
                 key={check.key}
-                className="rounded-2xl border settings-border bg-card/65 px-4 py-3"
+                className="playful-card-soft px-4 py-3"
               >
                 <div className="flex items-start gap-3">
                   {getSetupCheckIcon(check)}
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-semibold text-foreground">{check.title}</p>
-                      <span className="rounded-full border settings-border bg-background/60 px-2 py-0.5 text-[11px] font-medium text-muted-text">
+                      {/* 状态胶囊沿用 playful 的软色 chip：底色变暖，但状态语义仍由左侧图标承担，
+                          不把 success / warning 这类语义色挪到胶囊上。 */}
+                      <PlayfulChip tone="soft" size="sm">
                         {getSetupCheckStatusLabel(check, t)}
-                      </span>
+                      </PlayfulChip>
                     </div>
                     <p className="mt-1 text-xs leading-5 text-muted-text">{check.message}</p>
                     {check.nextStep ? (
@@ -356,7 +441,7 @@ const FirstRunSetupCard: React.FC<FirstRunSetupCardProps> = ({
           <SettingsAlert title={t('settings.actionSuccess')} message={smokeSuccess} variant="success" />
         ) : null}
       </div>
-    </SettingsSectionCard>
+    </SettingsGroupCard>
   );
 };
 
@@ -508,13 +593,14 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
   };
 
   return (
-    <SettingsSectionCard
+    <SettingsGroupCard
       title={t('settings.schedulerTitle')}
       description={t('settings.schedulerDescription')}
+      icon={<Clock className="h-4 w-4" />}
     >
       <div data-testid="scheduler-settings-card" className="space-y-4">
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
-          <div className="space-y-4 rounded-2xl border settings-border bg-background/35 px-4 py-4">
+          <div className="playful-card-soft space-y-4 px-4 py-4">
                 <label className="flex items-start gap-3">
                   <input
                     type="checkbox"
@@ -543,7 +629,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
                 {scheduleTimes.map((time, index) => (
                   <div
                     key={index}
-                    className="inline-flex h-11 shrink-0 items-center gap-1 rounded-xl border settings-border bg-card/90 p-1 shadow-inner"
+                    className="playful-card-soft inline-flex h-11 shrink-0 items-center gap-1 p-1"
                   >
                     <input
                       data-testid={`scheduler-time-input-${index}`}
@@ -593,7 +679,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
             </div>
           </div>
 
-          <div className="space-y-3 rounded-2xl border settings-border bg-background/35 px-4 py-4">
+          <div className="playful-card-soft space-y-3 px-4 py-4">
             <div>
               <p className="text-sm font-semibold text-foreground">{t('settings.schedulerStatus')}</p>
               <p className="mt-1 text-xs leading-6 text-muted-text">
@@ -605,17 +691,17 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
               </p>
             </div>
             <dl className="grid grid-cols-1 gap-2 text-xs">
-              <div className="rounded-xl border settings-border bg-card/60 px-3 py-2">
+              <div className="playful-chip px-3 py-2">
                 <dt className="text-muted-text">{t('settings.schedulerEffectiveTimes')}</dt>
                 <dd className="mt-1 font-medium text-foreground">{effectiveStatusTimes.join(', ') || '-'}</dd>
               </div>
-              <div className="rounded-xl border settings-border bg-card/60 px-3 py-2">
+              <div className="playful-chip px-3 py-2">
                 <dt className="text-muted-text">{t('settings.schedulerNextRun')}</dt>
                 <dd className="mt-1 font-medium text-foreground">
                   {formatSchedulerTimestamp(status?.nextRunAt, language)}
                 </dd>
               </div>
-              <div className="rounded-xl border settings-border bg-card/60 px-3 py-2">
+              <div className="playful-chip px-3 py-2">
                 <dt className="text-muted-text">{t('settings.schedulerLastSuccess')}</dt>
                 <dd data-testid="scheduler-last-success" className="mt-1 font-medium text-foreground">
                   {formatSchedulerTimestamp(status?.lastSuccessAt, language)}
@@ -672,7 +758,7 @@ const SchedulerSettingsCard: React.FC<SchedulerSettingsCardProps> = ({
           <SettingsAlert title={t('settings.actionSuccess')} message={runNowSuccess} variant="success" />
         ) : null}
       </div>
-    </SettingsSectionCard>
+    </SettingsGroupCard>
   );
 };
 
@@ -1146,12 +1232,15 @@ const SettingsPage: React.FC = () => {
     actual: selectedAgentArch,
   };
   const activeConfigPanel = hasActiveConfigItems ? (
-    <SettingsSectionCard
+    <SettingsGroupCard
       title={activeCategoryTitle}
       description={activeCategoryDescription || t('settings.activePanelDescription')}
+      icon={ACTIVE_PANEL_ICONS[activeCategory as SystemConfigCategory]}
     >
       {visibleActiveItems.length ? (
-        <div className="divide-y divide-[var(--settings-border-soft)] overflow-hidden rounded-lg border border-[var(--settings-border)] bg-[var(--settings-surface)]">
+        // 字段列表本身是「一张暖色内嵌面板」，行与行之间仍用细分割线：
+        // 分组感靠卡片描边，行高一律不动，避免设置页变得难扫。
+        <div className="playful-card-soft divide-y divide-[var(--settings-border-soft)] overflow-hidden">
           {visibleActiveItems.map((item) => {
             const fieldIssues = item.key === 'AGENT_ARCH' && hasCodexArchitectureConflict
               ? [...(issueByKey[item.key] || []), codexArchitectureIssue]
@@ -1170,7 +1259,7 @@ const SettingsPage: React.FC = () => {
         </div>
       ) : null}
       {promptCacheAdvancedItems.length ? (
-        <details className="group/prompt-cache overflow-hidden rounded-lg border border-[var(--settings-border)] bg-[var(--settings-surface)] transition-colors duration-200 hover:bg-[var(--settings-surface-hover)]">
+        <details className="playful-card-soft group/prompt-cache overflow-hidden transition-[filter] duration-200 hover:brightness-105">
           <summary className="flex cursor-pointer list-none items-start justify-between gap-3 px-4 py-4 [&::-webkit-details-marker]:hidden">
             <div className="min-w-0 space-y-1">
               <p className="text-sm font-semibold text-foreground">
@@ -1196,56 +1285,72 @@ const SettingsPage: React.FC = () => {
           </div>
         </details>
       ) : null}
-    </SettingsSectionCard>
+    </SettingsGroupCard>
   ) : (
     <EmptyState
       title={t('settings.currentCategoryEmptyTitle')}
       description={t('settings.currentCategoryEmptyDescription')}
-      className="settings-surface-panel settings-border-strong border-none bg-transparent shadow-none"
+      className="playful-card-soft"
     />
   );
 
   return (
-    <div className="settings-page min-h-full px-4 pb-6 pt-4 md:px-6">
-      <div className="mb-4 rounded-lg border settings-border bg-card/90 px-4 py-4 shadow-soft-card backdrop-blur-sm">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+    // 保留 settings-page 类名：index.css 里 `.settings-page .input-surface` 的表单观感依赖它，不能丢；
+    // 外层换成 PlayfulPage 是为了让设置页和首页 / 组合 / 选股页共享同一块暖色底。
+    <PlayfulPage bare className="settings-page min-h-full px-4 pb-6 pt-4 md:px-6">
+      {/* 顶部 hero 与其它已改造页面同构（吉祥物 + 标题 + 说明 + 操作区），
+          但操作区里的重置 / 保存按钮完全沿用原有 wiring、禁用条件与文案。 */}
+      <PlayfulCard
+        variant="hero"
+        padding="none"
+        className="mb-4 flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between"
+      >
+        <div className="flex min-w-0 items-center gap-3 sm:gap-4">
+          <PlayfulMascot className="h-[72px] w-[104px] shrink-0" />
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold tracking-tight text-foreground">{t('settings.pageTitle')}</h1>
-            <p className="max-w-3xl text-xs leading-5 text-muted-text sm:text-sm sm:leading-6">
+            <h1 className="text-lg font-extrabold tracking-tight text-foreground md:text-xl">{t('settings.pageTitle')}</h1>
+            <p className="mt-1 max-w-3xl text-xs font-semibold leading-5 playful-ink-soft sm:text-sm sm:leading-6">
               {t('settings.pageDescription')}
             </p>
           </div>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="settings-secondary"
-              size="sm"
-              className="px-2.5"
-              onClick={resetDraft}
-              disabled={isLoading || isSaving}
-            >
-              <RefreshCw className="h-4 w-4" aria-hidden="true" />
-              {t('settings.reset')}
-            </Button>
-            <Button
-              type="button"
-              variant="settings-primary"
-              size="sm"
-              className="px-2.5"
-              onClick={() => void handleSaveConfig()}
-              disabled={!effectiveHasDirty || isSaving || isLoading}
-              isLoading={isSaving}
-              loadingText={t('settings.saving')}
-            >
-              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-              {isSaving
-                ? t('settings.saving')
-                : effectiveDirtyCount
-                  ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
-                  : t('settings.saveConfig')}
-            </Button>
-          </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {/* 未保存项在标题旁边先给一次提示：设置页分组多，滚到底部才发现「有改动没保存」代价太高。
+              这里只是既有 effectiveDirtyCount 的另一种呈现，不参与任何保存逻辑。 */}
+          {effectiveHasDirty ? (
+            <PlayfulChip tone="sun" className="shrink-0">
+              {t('settingsPage.unsavedChanges', { count: effectiveDirtyCount })}
+            </PlayfulChip>
+          ) : null}
+          <Button
+            type="button"
+            variant="settings-secondary"
+            size="sm"
+            className="px-2.5"
+            onClick={resetDraft}
+            disabled={isLoading || isSaving}
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+            {t('settings.reset')}
+          </Button>
+          <Button
+            type="button"
+            variant="settings-primary"
+            size="sm"
+            className="px-2.5"
+            onClick={() => void handleSaveConfig()}
+            disabled={!effectiveHasDirty || isSaving || isLoading}
+            isLoading={isSaving}
+            loadingText={t('settings.saving')}
+          >
+            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+            {isSaving
+              ? t('settings.saving')
+              : effectiveDirtyCount
+                ? t('settings.saveConfigWithCount', { count: effectiveDirtyCount })
+                : t('settings.saveConfig')}
+          </Button>
         </div>
 
         {saveError ? (
@@ -1256,7 +1361,7 @@ const SettingsPage: React.FC = () => {
             onAction={retryAction === 'save' ? () => void retry() : undefined}
           />
         ) : null}
-      </div>
+      </PlayfulCard>
 
       {loadError ? (
         <ApiErrorAlert
@@ -1280,7 +1385,7 @@ const SettingsPage: React.FC = () => {
             />
           </aside>
 
-          <section className="space-y-4">
+          <PlayfulSection>
             {shouldShowFirstRunSetup ? (
               <FirstRunSetupCard
                 status={setupStatus}
@@ -1299,11 +1404,12 @@ const SettingsPage: React.FC = () => {
               />
             ) : null}
             {shouldShowScreeningSettings ? (
-              <SettingsSectionCard
+              <SettingsGroupCard
                 title={t('settings.screening')}
                 description={t('settings.screeningDescription')}
+                icon={<Target className="h-4 w-4" />}
               >
-                <div className="flex flex-col gap-4 rounded-2xl border settings-border bg-background/35 px-4 py-4 md:flex-row md:items-center md:justify-between">
+                <div className="playful-card-soft flex flex-col gap-4 px-4 py-4 md:flex-row md:items-center md:justify-between">
                   <div>
                     <p className="text-sm font-semibold text-foreground">
                       {screeningEnabled ? t('settings.screeningEnabled') : t('settings.screeningDisabled')}
@@ -1338,8 +1444,10 @@ const SettingsPage: React.FC = () => {
                     <SettingsAlert title={t('settings.actionSuccess')} message={screeningActionSuccess} variant="success" />
                   </div>
                 ) : null}
-              </SettingsSectionCard>
+              </SettingsGroupCard>
             ) : null}
+            {/* 认证 / 修改密码 / 通知测试三个面板来自 components/settings（共享组件，本次不改），
+                它们自带 SettingsSectionCard 表面，所以这里保持直接渲染，不额外套卡以免出现双层边框。 */}
             {activeCategory === 'system' ? <AuthSettingsCard /> : null}
             {activeCategory === 'system' ? (
               <SchedulerSettingsCard
@@ -1355,14 +1463,15 @@ const SettingsPage: React.FC = () => {
             ) : null}
             {activeCategory === 'system' ? (
               <div id="desktop-version-info">
-              <SettingsSectionCard
+              <SettingsGroupCard
                 title={t('settings.versionInfo')}
                 description={t('settings.versionInfoDescription')}
+                icon={<Tag className="h-4 w-4" />}
               >
                 <div
                   className={`grid grid-cols-1 gap-3 ${shouldShowDesktopVersionCard ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}
                 >
-                  <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
+                  <div className="playful-card-soft px-4 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
                       {t('settings.versionWebui')}
                     </p>
@@ -1370,7 +1479,7 @@ const SettingsPage: React.FC = () => {
                       {WEB_BUILD_INFO.version}
                     </p>
                   </div>
-                  <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
+                  <div className="playful-card-soft px-4 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
                       {t('settings.versionRevision')}
                     </p>
@@ -1378,7 +1487,7 @@ const SettingsPage: React.FC = () => {
                       {WEB_BUILD_INFO.revision}
                     </p>
                   </div>
-                  <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
+                  <div className="playful-card-soft px-4 py-3">
                     <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
                       {t('settings.versionBuildTime')}
                     </p>
@@ -1387,7 +1496,7 @@ const SettingsPage: React.FC = () => {
                     </p>
                   </div>
                   {shouldShowDesktopVersionCard ? (
-                    <div className="rounded-2xl border settings-border bg-background/40 px-4 py-3">
+                    <div className="playful-card-soft px-4 py-3">
                       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-text">
                         {t('settings.versionDesktop')}
                       </p>
@@ -1401,7 +1510,7 @@ const SettingsPage: React.FC = () => {
                   {t('settings.updateBuildDescription')}
                 </p>
                 {canCheckDesktopUpdate ? (
-                  <div className="mt-4 space-y-3 rounded-2xl border settings-border bg-background/30 px-4 py-4">
+                  <div className="playful-card-soft mt-4 space-y-3 px-4 py-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                       <div>
                         <p className="text-sm font-medium text-foreground">{t('settings.desktopUpdate')}</p>
@@ -1446,13 +1555,14 @@ const SettingsPage: React.FC = () => {
                     {t('settings.fallbackVersionWarning')}
                   </p>
                 ) : null}
-              </SettingsSectionCard>
+              </SettingsGroupCard>
               </div>
             ) : null}
             {activeCategory === 'system' ? (
-              <SettingsSectionCard
+              <SettingsGroupCard
                 title={t('settings.configBackup')}
                 description={t('settings.configBackupDescription')}
+                icon={<Archive className="h-4 w-4" />}
               >
                 <div className="space-y-4">
                   {!isEnvBackupAllowed ? (
@@ -1508,12 +1618,13 @@ const SettingsPage: React.FC = () => {
                     <SettingsAlert title={t('settings.actionSuccess')} message={envBackupActionSuccess} variant="success" />
                   ) : null}
                 </div>
-              </SettingsSectionCard>
+              </SettingsGroupCard>
             ) : null}
             {activeCategory === 'base' ? (
-              <SettingsSectionCard
+              <SettingsGroupCard
                 title={t('settings.intelligentImport')}
                 description={t('settings.intelligentImportDescription')}
+                icon={<Sparkles className="h-4 w-4" />}
               >
                 <IntelligentImport
                   stockListValue={
@@ -1527,12 +1638,13 @@ const SettingsPage: React.FC = () => {
                   }}
                   disabled={isSaving || isLoading}
                 />
-              </SettingsSectionCard>
+              </SettingsGroupCard>
             ) : null}
             {activeCategory === 'ai_model' ? (
-              <SettingsSectionCard
+              <SettingsGroupCard
                 title={t('settings.llmAccess')}
                 description={t('settings.llmAccessDescription')}
+                icon={<Cpu className="h-4 w-4" />}
               >
                 <GenerationBackendStatusPanel
                   items={generationBackendDraftItems}
@@ -1552,7 +1664,7 @@ const SettingsPage: React.FC = () => {
                   }}
                   disabled={isSaving || isLoading}
                 />
-              </SettingsSectionCard>
+              </SettingsGroupCard>
             ) : null}
             {activeCategory === 'system' && passwordChangeable ? (
               <ChangePasswordCard />
@@ -1576,9 +1688,10 @@ const SettingsPage: React.FC = () => {
                 resetKey={`agent-backend:${configVersion}`}
                 diagnosticHint={settingsPanelDiagnosticHint}
               >
-                <SettingsSectionCard
+                <SettingsGroupCard
                   title={t('settings.agentBackendSectionTitle')}
                   description={t('settings.agentBackendSectionDescription')}
+                  icon={<Bot className="h-4 w-4" />}
                 >
                   <AgentBackendStatusPanel
                     items={agentBackendDraftItems}
@@ -1589,7 +1702,7 @@ const SettingsPage: React.FC = () => {
                     onUseSingleAgent={() => setDraftValue('AGENT_ARCH', 'single')}
                     onEnableAgentMode={() => setDraftValue('AGENT_MODE', 'true')}
                   />
-                </SettingsSectionCard>
+                </SettingsGroupCard>
               </SettingsPanelErrorBoundary>
             ) : null}
             {shouldGuardActiveConfigPanel && hasActiveConfigItems ? (
@@ -1601,7 +1714,7 @@ const SettingsPage: React.FC = () => {
                 {activeConfigPanel}
               </SettingsPanelErrorBoundary>
             ) : activeConfigPanel}
-          </section>
+          </PlayfulSection>
         </div>
       )}
 
@@ -1633,7 +1746,7 @@ const SettingsPage: React.FC = () => {
           setShowImportConfirm(false);
         }}
       />
-    </div>
+    </PlayfulPage>
   );
 };
 
