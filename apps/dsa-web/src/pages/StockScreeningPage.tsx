@@ -37,11 +37,16 @@ import {
   type ScreeningScreenResponse,
   type ScreeningScreenTaskStatus,
   type ScreeningStrategy,
+  type ScreeningTrackingResponse,
 } from '../api/screening';
 import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
 import { AppPage, Button, InlineAlert, Select } from '../components/common';
+import { useUiLanguage } from '../contexts/UiLanguageContext';
 
 const MARKETS = [{ id: 'cn', label: 'A 股' }];
+// 复盘回看窗口。与后端 SCREENING_PICK_TRACKING_DAYS 的默认值保持一致；
+// 这里只是请求参数，真正的口径以后端返回的 windowDays 为准（页面上按返回值展示）。
+const TRACKING_WINDOW_DAYS = 60;
 const SCREEN_TASK_STORAGE_KEY = 'dsa.screening.activeScreenTask.v1';
 const SCREEN_TASK_POLL_INTERVAL_MS = 2000;
 const CUSTOM_STRATEGY_OPTION_VALUE = '__custom_strategy__';
@@ -186,6 +191,28 @@ const formatPercent = (value: unknown) => {
     return '-';
   }
   return `${(Number(value) * 100).toFixed(0)}%`;
+};
+
+// 复盘收益率已经是百分数（后端返回 +1.23 表示 +1.23%），不能再乘 100。
+const formatTrackingPercent = (value: number | null | undefined, digits = 2) => {
+  if (value == null || Number.isNaN(Number(value))) {
+    return '-';
+  }
+  const number = Number(value);
+  return `${number > 0 ? '+' : ''}${number.toFixed(digits)}%`;
+};
+
+const getTrackingReturnClassName = (value: number | null | undefined) => {
+  if (value == null || Number.isNaN(Number(value))) {
+    return 'text-secondary-text';
+  }
+  if (Number(value) > 0) {
+    return 'text-success';
+  }
+  if (Number(value) < 0) {
+    return 'text-danger';
+  }
+  return 'text-secondary-text';
 };
 
 const FACTOR_LABELS: Record<string, string> = {
@@ -833,6 +860,7 @@ const MiniSparkline: React.FC<{ score?: number | null; selected?: boolean }> = (
 
 const StockScreeningPage: React.FC = () => {
   const navigate = useNavigate();
+  const { t } = useUiLanguage();
   const [restoredTask] = useState<PersistedScreenTask | null>(() => readPersistedScreenTask());
   const [enabled, setEnabled] = useState(false);
   const [available, setAvailable] = useState(false);
@@ -862,6 +890,9 @@ const StockScreeningPage: React.FC = () => {
   const [historyRuns, setHistoryRuns] = useState<ScreeningRunSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState('');
+  const [tracking, setTracking] = useState<ScreeningTrackingResponse | null>(null);
+  const [trackingLoading, setTrackingLoading] = useState(false);
+  const [trackingError, setTrackingError] = useState('');
   const [restoreResolved, setRestoreResolved] = useState(() => !restoredTask?.runId);
   // 标记当前 strategy 是否来自历史 run（刷新自动恢复或手动历史选择）的上下文同步。
   // 为 true 时 loadStrategies 跳过“不在列表则回退第一项”的归一化，
@@ -895,6 +926,41 @@ const StockScreeningPage: React.FC = () => {
   const isScreeningEnabled = enabled && available;
   const statusText = isScreeningEnabled ? '选股已开启' : '选股未开启';
 
+  // 复盘区块的展示文案（原因码 → 本地化）。后端只返回机器可读的原因码。
+  const trackingReasonLabel = (reason: string | null | undefined): string => {
+    switch (reason) {
+      case 'missing_pick_price':
+        return t('screening.tracking.reason.missing_pick_price');
+      case 'unknown_identity':
+        return t('screening.tracking.reason.unknown_identity');
+      case 'no_daily_rows':
+        return t('screening.tracking.reason.no_daily_rows');
+      case 'no_forward_bars':
+        return t('screening.tracking.reason.no_forward_bars');
+      default:
+        return t('screening.tracking.reason.generic');
+    }
+  };
+  const trackingBenchmarkLabel = (reason: string | null | undefined): string => {
+    switch (reason) {
+      case 'market_snapshot_is_single_date_cross_section':
+        return t('screening.tracking.benchmark.reason.market_snapshot_is_single_date_cross_section');
+      case 'no_index_and_no_multi_date_snapshot':
+        return t('screening.tracking.benchmark.reason.no_index_and_no_multi_date_snapshot');
+      case 'benchmark_probe_failed':
+        return t('screening.tracking.benchmark.reason.benchmark_probe_failed');
+      case 'index_series_found':
+        return t('screening.tracking.benchmark.reason.index_series_found');
+      default:
+        return t('screening.tracking.benchmark.reason.no_benchmark_series');
+    }
+  };
+  const trackingFreshnessText = tracking
+    ? tracking.dataFreshness.stockDailyLatestDate
+      ? t('screening.tracking.freshness', { date: tracking.dataFreshness.stockDailyLatestDate })
+      : t('screening.tracking.freshness.none')
+    : '';
+
   const applyScreenResult = useCallback((result: ScreeningScreenResponse) => {
     const nextCandidates = result.candidates || [];
     setScreenMeta(result);
@@ -912,6 +978,19 @@ const StockScreeningPage: React.FC = () => {
       setHistoryError(toApiErrorMessage(err, '历史记录加载失败'));
     } finally {
       setHistoryLoading(false);
+    }
+  }, []);
+
+  const loadTracking = useCallback(async () => {
+    setTrackingLoading(true);
+    setTrackingError('');
+    try {
+      const result = await screeningApi.getTracking({ days: TRACKING_WINDOW_DAYS, limit: 200 });
+      setTracking(result);
+    } catch (err) {
+      setTrackingError(toApiErrorMessage(err, ''));
+    } finally {
+      setTrackingLoading(false);
     }
   }, []);
 
@@ -1193,6 +1272,7 @@ const StockScreeningPage: React.FC = () => {
           void loadStrategies();
           void loadHotspots(false);
           void loadHistory();
+          void loadTracking();
         }
       })
       .catch(() => {
@@ -1204,7 +1284,7 @@ const StockScreeningPage: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [loadHotspots, loadStrategies]);
+  }, [loadHotspots, loadStrategies, loadTracking]);
 
   // 刷新后优先从 history API 按 run_id 恢复结果；恢复失败再回退到 task 轮询
   useEffect(() => {
@@ -2067,6 +2147,204 @@ const StockScreeningPage: React.FC = () => {
         )}
         </section>
       ) : null}
+
+      <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Activity className="h-4 w-4 text-cyan" />
+            {t('screening.tracking.title')}
+          </div>
+          <button
+            type="button"
+            className="text-xs font-medium text-cyan transition-colors hover:text-foreground"
+            onClick={() => void loadTracking()}
+            disabled={trackingLoading}
+          >
+            {trackingLoading ? t('common.loading') : t('screening.tracking.refresh')}
+          </button>
+        </div>
+        <p className="mb-3 text-xs text-secondary-text">
+          {t('screening.tracking.subtitle', { days: tracking?.windowDays ?? TRACKING_WINDOW_DAYS })}
+          {tracking ? ` · ${trackingFreshnessText}` : ''}
+          {tracking && tracking.runWindow.malformedRuns > 0
+            ? ` · ${t('screening.tracking.malformedRuns', { count: tracking.runWindow.malformedRuns })}`
+            : ''}
+        </p>
+        {trackingError ? (
+          <p className="mb-3 text-xs text-danger">
+            {t('screening.tracking.loadError')}
+            {trackingError ? `: ${trackingError}` : ''}
+          </p>
+        ) : null}
+        {!tracking && trackingLoading ? (
+          <p className="py-3 text-center text-xs text-secondary-text">{t('screening.tracking.loading')}</p>
+        ) : null}
+        {!tracking && !trackingLoading && !trackingError ? (
+          <p className="py-3 text-center text-xs text-secondary-text">{t('screening.tracking.empty')}</p>
+        ) : null}
+        {tracking ? (
+          <>
+            <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+              {[
+                { label: t('screening.tracking.metric.picks'), value: String(tracking.total.picks) },
+                { label: t('screening.tracking.metric.trackable'), value: String(tracking.total.trackable) },
+                { label: t('screening.tracking.metric.untrackable'), value: String(tracking.total.untrackable) },
+                {
+                  label: t('screening.tracking.metric.hitRate'),
+                  value: tracking.total.hitRate == null
+                    ? t('screening.tracking.noTrackableValue')
+                    : formatTrackingPercent(tracking.total.hitRate * 100, 0),
+                },
+                {
+                  label: t('screening.tracking.metric.avgReturn'),
+                  value: tracking.total.avgReturnPct == null
+                    ? t('screening.tracking.noTrackableValue')
+                    : formatTrackingPercent(tracking.total.avgReturnPct),
+                },
+              ].map((item) => (
+                <div key={item.label} className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-2">
+                  <div className="text-[11px] text-secondary-text">{item.label}</div>
+                  <div className="mt-0.5 text-sm font-semibold text-foreground">{item.value}</div>
+                </div>
+              ))}
+            </div>
+
+            {tracking.total.untrackable > 0 ? (
+              <InlineAlert
+                className="mb-3"
+                variant={tracking.total.trackable === 0 ? 'warning' : 'info'}
+                title={tracking.total.trackable === 0 ? t('screening.tracking.untrackableNotice.title') : undefined}
+                message={
+                  tracking.total.trackable === 0
+                    ? t('screening.tracking.untrackableNotice.message', {
+                        total: tracking.total.picks,
+                        untrackable: tracking.total.untrackable,
+                      })
+                    : t('screening.tracking.partialNotice.message', {
+                        trackable: tracking.total.trackable,
+                        untrackable: tracking.total.untrackable,
+                      })
+                }
+              />
+            ) : null}
+
+            {tracking.untrackableReasons.length > 0 ? (
+              <p className="mb-3 text-xs text-secondary-text">
+                {tracking.untrackableReasons
+                  .map((item) => `${trackingReasonLabel(item.reason)} ${item.count}`)
+                  .join(' · ')}
+              </p>
+            ) : null}
+
+            {tracking.strategies.length > 0 ? (
+              <div className="mb-4">
+                <p className="mb-2 text-xs font-semibold text-foreground">
+                  {t('screening.tracking.strategyTable.title')}
+                </p>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[560px] text-left text-xs">
+                    <thead className="text-secondary-text">
+                      <tr>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.strategyTable.strategy')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.picks')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.trackable')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.hitRate')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.avgReturn')}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/60">
+                      {tracking.strategies.map((row) => (
+                        <tr key={row.strategy}>
+                          <td className="py-2 pr-3 font-medium text-foreground">
+                            {formatHistoryStrategyName(row.strategy, strategies)}
+                          </td>
+                          <td className="py-2 pr-3 text-secondary-text">{row.picks}</td>
+                          <td className="py-2 pr-3 text-secondary-text">{row.trackable}</td>
+                          <td className="py-2 pr-3 text-secondary-text">
+                            {row.hitRate == null
+                              ? t('screening.tracking.noTrackableValue')
+                              : formatTrackingPercent(row.hitRate * 100, 0)}
+                          </td>
+                          <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(row.avgReturnPct)}`}>
+                            {row.avgReturnPct == null ? '-' : formatTrackingPercent(row.avgReturnPct)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {tracking.picks.length > 0 ? (
+              <div>
+                <p className="mb-2 text-xs font-semibold text-foreground">
+                  {t('screening.tracking.picksTable.title')}
+                </p>
+                <div className="max-h-80 overflow-y-auto">
+                  <table className="w-full min-w-[720px] text-left text-xs">
+                    <thead className="sticky top-0 bg-card/95 text-secondary-text">
+                      <tr>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.name')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.pickDate')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.pickPrice')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.latestClose')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.return')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.maxDrawdown')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.daysHeld')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.status')}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/60">
+                      {tracking.picks.map((pick) => (
+                        <tr key={`${pick.runId}-${pick.code}`}>
+                          <td className="py-2 pr-3">
+                            <span className="font-medium text-foreground">{pick.name || pick.code}</span>
+                            <span className="ml-1 text-secondary-text">{pick.code}</span>
+                          </td>
+                          <td className="py-2 pr-3 text-secondary-text">{pick.pickDate}</td>
+                          <td className="py-2 pr-3 text-secondary-text">
+                            {pick.pickPrice == null ? '-' : pick.pickPrice.toFixed(2)}
+                          </td>
+                          <td className="py-2 pr-3 text-secondary-text">
+                            {pick.latestClose == null ? '-' : pick.latestClose.toFixed(2)}
+                          </td>
+                          <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(pick.returnPct)}`}>
+                            {pick.trackable ? formatTrackingPercent(pick.returnPct) : '-'}
+                          </td>
+                          <td className={`py-2 pr-3 ${getTrackingReturnClassName(pick.maxDrawdownPct)}`}>
+                            {pick.trackable ? formatTrackingPercent(pick.maxDrawdownPct) : '-'}
+                          </td>
+                          <td className="py-2 pr-3 text-secondary-text">
+                            {pick.daysHeld == null ? '-' : pick.daysHeld}
+                          </td>
+                          <td className="py-2 pr-3">
+                            {pick.trackable ? (
+                              <span className="text-success">{t('screening.tracking.status.trackable')}</span>
+                            ) : (
+                              <span className="text-warning">
+                                {t('screening.tracking.status.untrackable')} · {trackingReasonLabel(pick.reason)}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {!tracking.benchmark.available ? (
+              <p className="mt-3 text-xs text-secondary-text">
+                {t('screening.tracking.benchmark.unavailable', {
+                  reason: trackingBenchmarkLabel(tracking.benchmark.reason),
+                })}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+      </section>
 
       <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

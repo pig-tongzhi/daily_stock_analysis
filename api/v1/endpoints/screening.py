@@ -248,3 +248,19 @@ def screening_source_history(
     db_manager: DatabaseManager = Depends(get_database_manager),
 ) -> Dict[str, Any]:
     return _service(config, db_manager).source_history(limit=limit)
+
+
+@router.get("/tracking")
+def screening_tracking(
+    days: int = Query(60, ge=1, le=365),
+    limit: int = Query(200, ge=1, le=1000),
+    strategy: str = Query("", max_length=64),
+    config: Config = Depends(get_config_dep),
+    db_manager: DatabaseManager = Depends(get_database_manager),
+) -> Dict[str, Any]:
+    """历史选股结果的复盘表现。
+
+    没有前瞻 K 线的入选以 ``untrackable`` 返回并单列原因；命中率的分母只含
+    可复盘的入选，不会被不可复盘的入选稀释成假数字。
+    """
+    return _service(config, db_manager).tracking(days=days, limit=limit, strategy=strategy)

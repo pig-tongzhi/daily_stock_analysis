@@ -429,11 +429,41 @@ def _stock_daily_refresh_interval_seconds(config: Config) -> int:
     return minutes * 60 if minutes > 0 else 3600
 
 
+def _recent_screening_pick_codes(config: Config) -> List[str]:
+    """最近选股入选的代码（回看窗口与上限走配置）。
+
+    这是"选股 → 复盘"的桥：入选记录一直存在 screening_runs.result_json 里，
+    但入选的股票从不进入行情刷新集合，于是 K 线永远缺、收益永远算不出来。
+    只读既有数据，不新增表。
+
+    fail-open：解析失败返回空列表，让调用方退回原清单 —— 复盘数据坏掉
+    不该让自选股的行情也一起停更。
+    """
+    try:
+        from src.services.screening_tracking_service import list_recent_pick_codes
+
+        return list_recent_pick_codes(
+            config=config,
+            days=getattr(config, "screening_pick_tracking_days", None),
+            max_codes=getattr(config, "screening_pick_tracking_max_codes", None),
+        )
+    except Exception:
+        logger.warning(
+            "[StockDailyRefresh] 读取选股入选代码失败；本次只刷新自选股与判断标的",
+            exc_info=True,
+        )
+        return []
+
+
 def _tracked_daily_codes(config: Config) -> List[str]:
-    """需要保持行情新鲜的代码：自选股 + 判断里出现过的标的。
+    """需要保持行情新鲜的代码：自选股 + 判断里出现过的标的 + 最近选股入选。
 
     判断里出现过的代码同样必需 —— 588200 只出现在 decision_signals 里、不在
     自选股中，缺少它的行情的直接后果就是那条唯一的买入判断永远无法复盘。
+
+    选股入选同理：此前只跟踪自选股与判断标的，24 次选股选中的 49 只股票里
+    只有 1 只留有 K 线，"上次选的股票后来怎么样了"因此无法回答。把入选纳入
+    刷新集合就闭合了这个回路，用的仍是已经存下来的数据。
     """
     codes: List[str] = []
     # stock_list 由配置解析而来，形态可能是 list 也可能是逗号分隔字符串。
@@ -464,6 +494,7 @@ def _tracked_daily_codes(config: Config) -> List[str]:
             "[StockDailyRefresh] 读取 decision_signals 代码失败；本次将只刷新自选股",
             exc_info=True,
         )
+    codes.extend(_recent_screening_pick_codes(config))
     return list(dict.fromkeys(codes))
 
 

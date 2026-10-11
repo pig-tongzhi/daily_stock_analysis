@@ -1061,6 +1061,15 @@ class Config:
     # 于是没人在分析时它静默停摆，K 线过期会让到期验证无法完成。
     stock_daily_refresh_enabled: bool = False
     stock_daily_refresh_interval_minutes: int = 60
+    # 选股结果的复盘桥接：行情刷新除了自选股与判断标的，还要覆盖最近 N 天
+    # 选股入选的代码。此前选中的股票从不进入 K 线刷新集合，于是"上次选的股票
+    # 后来涨了没"永远无法回答（49 只入选股中只有 1 只有 K 线）。
+    # 默认开启：它只影响刷新清单，真正是否刷新仍由 STOCK_DAILY_REFRESH_ENABLED 决定。
+    screening_pick_tracking_enabled: bool = True
+    screening_pick_tracking_days: int = 60
+    # 上限用于兜住单轮刷新的耗时：刷新循环是串行的、每只股票一次网络请求，
+    # 无上限时 60 天窗口可能累积出上千只，单轮耗时超过刷新间隔本身。
+    screening_pick_tracking_max_codes: int = 200
     # 本地资讯池的独立抓取。此前只在跑分析时顺带抓取，不跑分析就不更新，
     # 而资讯的更新节奏（分钟级）与分析的频率（小时/天级）相差两个数量级。
     # tick 与频率分离：循环定期敲门，真正的频率由既有的 20 分钟冷却决定。
@@ -2081,6 +2090,21 @@ class Config:
                 os.getenv('STOCK_DAILY_REFRESH_INTERVAL_MINUTES'),
                 60,
                 field_name='STOCK_DAILY_REFRESH_INTERVAL_MINUTES',
+                minimum=1,
+            ),
+            screening_pick_tracking_enabled=os.getenv(
+                'SCREENING_PICK_TRACKING_ENABLED', 'true'
+            ).lower() == 'true',
+            screening_pick_tracking_days=parse_env_int(
+                os.getenv('SCREENING_PICK_TRACKING_DAYS'),
+                60,
+                field_name='SCREENING_PICK_TRACKING_DAYS',
+                minimum=1,
+            ),
+            screening_pick_tracking_max_codes=parse_env_int(
+                os.getenv('SCREENING_PICK_TRACKING_MAX_CODES'),
+                200,
+                field_name='SCREENING_PICK_TRACKING_MAX_CODES',
                 minimum=1,
             ),
             news_intel_fetch_loop_enabled=os.getenv(

@@ -300,6 +300,76 @@ export type ScreeningSourceHistory = {
   }>;
 };
 
+export type ScreeningTrackingPick = {
+  runId: string;
+  strategy: string;
+  market: string;
+  code: string;
+  name: string;
+  pickDate: string;
+  pickPrice: number | null;
+  score: number | null;
+  canonicalId: string | null;
+  trackable: boolean;
+  reason: string | null;
+  latestClose: number | null;
+  latestDate: string | null;
+  returnPct: number | null;
+  maxGainPct: number | null;
+  maxDrawdownPct: number | null;
+  daysHeld: number | null;
+  forwardBars: number;
+};
+
+export type ScreeningTrackingAggregate = {
+  picks: number;
+  trackable: number;
+  untrackable: number;
+  hitRate: number | null;
+  hitRateBasis: string;
+  avgReturnPct: number | null;
+  medianReturnPct: number | null;
+  bestReturnPct: number | null;
+  worstReturnPct: number | null;
+  avgDaysHeld: number | null;
+};
+
+export type ScreeningTrackingStrategy = ScreeningTrackingAggregate & {
+  strategy: string;
+};
+
+export type ScreeningTrackingResponse = {
+  enabled: boolean;
+  windowDays: number;
+  generatedAt: string;
+  runWindow: {
+    days: number;
+    malformedRuns: number;
+  };
+  total: ScreeningTrackingAggregate;
+  strategies: ScreeningTrackingStrategy[];
+  picks: ScreeningTrackingPick[];
+  untrackable: ScreeningTrackingPick[];
+  // 原因码用列表而不是 map：toCamelCase 会深度改写对象键，把 no_daily_rows
+  // 变成 noDailyRows —— 原因码是契约，不能依赖键名转换。
+  untrackableReasons: Array<{ reason: string; count: number }>;
+  dataFreshness: {
+    stockDailyLatestDate: string | null;
+    stockDailySeriesCount: number | null;
+    latestTrackableBarDate: string | null;
+    pickForwardBarsAvailable: boolean;
+  };
+  benchmark: {
+    available: boolean;
+    reason: string;
+    indexSeries: string[];
+    stockDailySeriesCount: number;
+    marketSnapshotDates: string[];
+    error?: string;
+  };
+  notes: string[];
+};
+
 export function notifyScreeningConfigChanged(): void {
   window.dispatchEvent(new Event(SCREENING_CONFIG_CHANGED_EVENT));
   notifySystemConfigChanged();
@@ -402,6 +472,17 @@ export const screeningApi = {
       params: { limit },
     });
     return toCamelCase<ScreeningSourceHistory>(response.data);
+  },
+
+  async getTracking(payload: { days?: number; limit?: number; strategy?: string } = {}): Promise<ScreeningTrackingResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/screening/tracking', {
+      params: {
+        days: payload.days ?? 60,
+        limit: payload.limit ?? 200,
+        strategy: payload.strategy || undefined,
+      },
+    });
+    return toCamelCase<ScreeningTrackingResponse>(response.data);
   },
 
   async getStrategies(): Promise<ScreeningStrategiesResponse> {

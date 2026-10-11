@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 选股结果复盘：新增 `GET /api/v1/screening/tracking` 与选股页「选股结果复盘」区块，用已存的 `screening_runs.result_json`（含选股时点价格）对齐 `stock_daily` 前瞻 K 线，输出命中率 / 平均收益 / 中位数 / 最大回撤。**不新增任何表**：入选来自既有 result_json，前瞻价格来自既有 stock_daily。拿不到前瞻 K 线的入选显式计入 `untrackable` 并单列原因（`no_daily_rows` / `no_forward_bars` / `missing_pick_price` / `unknown_identity`），既不当成 0% 收益、也不从命中率分母里消失 —— 此前 24 次选股选中的 49 只股票里只有 1 只有 K 线，"上次选的股票后来怎么样了"因此无法回答。
+- [改进] 行情刷新清单纳入最近选股入选：`_tracked_daily_codes` 在自选股与判断标的基础上追加回看窗口（默认 60 天）内的选股入选，与既有条目去重、上限 200 只（刷新循环串行、每只一次网络请求，不设上限时单轮耗时会超过刷新间隔本身）；解析失败 fail-open 退回原清单。新增 `SCREENING_PICK_TRACKING_ENABLED=true` / `SCREENING_PICK_TRACKING_DAYS=60` / `SCREENING_PICK_TRACKING_MAX_CODES=200`。
+- [测试] 新增 `tests/test_screening_tracking_service.py`：已知选股价 + 之后收盘价的收益计算、不可复盘入选不计入命中率分母（构造"按 0% 计入会改变答案"的反例）、畸形 `result_json` 不抛异常、`_tracked_daily_codes` 覆盖选股入选 / 去重 / 上限 / 窗口过滤 / fail-open；全部跑在内存库上，不接触生产库。
+- [文档] `.env.example` 补充 `SCREENING_PICK_TRACKING_*` 三个开关、默认值与上限理由。
+
 - [文档] 新增 `docs/architecture/OVERVIEW.md`：基于实测的架构现状、六个已确认的流程断裂点、四层单向流水线目标与分步改造路线
 - [修复] 选股 LLM 重排不再因响应被截断而静默降级。默认 `LLM_MAX_TOKENS=2048` 放不下排序 schema（每个候选 14 个字段、多为长中文说明），实测 5 个候选的响应在 4200+ 字符处被截断，JSON 尾部缺失后 `_extract_ranking_json` 解析失败，被记为 `no_json_found`，选股于是退回纯因子排序（`llm_ranked=false`）且只在日志留一行 WARNING。
 - [修复] 区分“响应被截断”与“确实没有 JSON”：新增 `_looks_like_truncated_json`（在字符串字面量之外统计括号配平），截断时报 `truncated_json` 并提示上调 `LLM_MAX_TOKENS`，不再误导为提示词问题。

@@ -128,6 +128,88 @@ describe('screeningApi', () => {
     expect(result.strategies[0].marketScope).toEqual(['cn']);
   });
 
+  it('loads pick performance review with untrackable picks kept separate', async () => {
+    get.mockResolvedValueOnce({
+      data: {
+        enabled: true,
+        window_days: 60,
+        generated_at: '2026-10-12T01:00:00+00:00',
+        run_window: { days: 60, malformed_runs: 1 },
+        total: {
+          picks: 2,
+          trackable: 1,
+          untrackable: 1,
+          hit_rate: 1,
+          hit_rate_basis: 'trackable_only',
+          avg_return_pct: 10,
+          median_return_pct: 10,
+          best_return_pct: 10,
+          worst_return_pct: 10,
+          avg_days_held: 2,
+        },
+        strategies: [
+          {
+            strategy: 'dual_low',
+            picks: 2,
+            trackable: 1,
+            untrackable: 1,
+            hit_rate: 1,
+            avg_return_pct: 10,
+          },
+        ],
+        picks: [
+          {
+            run_id: 'run-a',
+            strategy: 'dual_low',
+            code: '601166',
+            name: '兴业银行',
+            pick_date: '2026-10-07',
+            pick_price: 18,
+            canonical_id: 'sh601166',
+            trackable: true,
+            latest_close: 19.8,
+            latest_date: '2026-10-09',
+            return_pct: 10,
+            max_drawdown_pct: -2.78,
+            days_held: 2,
+            forward_bars: 2,
+          },
+          {
+            run_id: 'run-b',
+            strategy: 'dual_low',
+            code: '600036',
+            name: '招商银行',
+            pick_date: '2026-10-07',
+            pick_price: 41,
+            canonical_id: 'sh600036',
+            trackable: false,
+            reason: 'no_daily_rows',
+            return_pct: null,
+          },
+        ],
+        untrackable_reasons: [{ reason: 'no_daily_rows', count: 1 }],
+        data_freshness: { stock_daily_latest_date: '2026-10-09', pick_forward_bars_available: true },
+        benchmark: { available: false, reason: 'market_snapshot_is_single_date_cross_section', index_series: [] },
+        notes: [],
+      },
+    });
+
+    const result = await screeningApi.getTracking({ days: 60, limit: 200 });
+
+    expect(get).toHaveBeenCalledWith('/api/v1/screening/tracking', {
+      params: { days: 60, limit: 200, strategy: undefined },
+    });
+    expect(result.windowDays).toBe(60);
+    expect(result.total.untrackable).toBe(1);
+    // 不可复盘的入选既不能当成 0% 收益，也不能混进可复盘的收益里。
+    expect(result.picks[1].trackable).toBe(false);
+    expect(result.picks[1].returnPct).toBeNull();
+    expect(result.picks[1].reason).toBe('no_daily_rows');
+    // 原因码必须是原样的契约值：用列表承载，避免深层键名转换把它改成 noDailyRows。
+    expect(result.untrackableReasons).toEqual([{ reason: 'no_daily_rows', count: 1 }]);
+    expect(result.dataFreshness.stockDailyLatestDate).toBe('2026-10-09');
+  });
+
   it('loads hotspot themes from the built-in screening API', async () => {
     get.mockResolvedValueOnce({
       data: {

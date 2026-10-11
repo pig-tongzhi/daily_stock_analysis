@@ -952,6 +952,28 @@ class ScreeningService:
         runs = db_manager.list_screening_runs(limit=limit)
         return _summarize_screening_source_history(runs)
 
+    def tracking(
+        self,
+        *,
+        days: Optional[int] = None,
+        limit: Optional[int] = None,
+        strategy: str = "",
+    ) -> Dict[str, Any]:
+        """选股结果复盘：入选记录 + 前瞻 K 线 → 命中率 / 收益 / 不可复盘原因。
+
+        只读既有表（screening_runs + stock_daily），不新增表；没有前瞻 K 线的
+        入选显式计入 untrackable，绝不当作 0% 收益。
+        """
+        _ensure_screening_enabled(self.config)
+        db_manager = self._require_history_database()
+        from src.services.screening_tracking_service import ScreeningTrackingService
+
+        return ScreeningTrackingService(config=self.config, db_manager=db_manager).tracking(
+            days=days,
+            limit=limit,
+            strategy=strategy,
+        )
+
     def _require_history_database(self) -> DatabaseManager:
         if self.db_manager is None:
             raise HTTPException(
