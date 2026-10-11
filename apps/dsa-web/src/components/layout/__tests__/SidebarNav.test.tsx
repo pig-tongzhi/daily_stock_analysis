@@ -59,13 +59,16 @@ describe('SidebarNav', () => {
 
     expect(await screen.findByRole('link', { name: '选股' })).toHaveAttribute('href', '/screening');
     const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
-    expect(hrefs.slice(0, 6)).toEqual([
+    // 侧栏收敛为 8 项后的目标顺序：AI 建议 在 资讯 之前。
+    expect(hrefs).toEqual([
       '/',
       '/chat',
       '/screening',
       '/portfolio',
-      '/intelligence',
       '/decision-signals',
+      '/intelligence',
+      '/data',
+      '/settings',
     ]);
   });
 
@@ -122,16 +125,32 @@ describe('SidebarNav', () => {
     expect(screen.getByRole('button', { name: '切换主题(折叠)' })).toBeInTheDocument();
   });
 
-  it('renders the alerts navigation item and marks it active', () => {
+  it('不再把告警 / 回测 / 用量 渲染成侧栏入口', async () => {
+    mockGetScreeningStatus.mockResolvedValueOnce({ enabled: true, available: true });
     render(
       <MemoryRouter initialEntries={['/alerts']}>
         <SidebarNav />
       </MemoryRouter>,
     );
 
-    const alertsLink = screen.getByRole('link', { name: '告警' });
-    expect(alertsLink).toHaveAttribute('href', '/alerts');
-    expect(alertsLink).toHaveClass('font-medium');
+    // 告警功能完全未使用（四张告警表全空）、回测表同样为空，用量已并入「数据」页，
+    // 三者都从侧栏下线；它们的目标路由仍然保留（见下一个用例）。
+    await screen.findByRole('link', { name: '数据' });
+    for (const label of ['告警', '回测', '用量']) {
+      expect(screen.queryByRole('link', { name: label })).not.toBeInTheDocument();
+    }
+    expect(screen.getAllByRole('link')).toHaveLength(8);
+  });
+
+  it('从旧的 /usage 链接进入时仍然把「数据」标为当前项', async () => {
+    render(
+      <MemoryRouter initialEntries={['/usage']}>
+        <SidebarNav />
+      </MemoryRouter>,
+    );
+
+    const dataLink = await screen.findByRole('link', { name: '数据' });
+    expect(dataLink.className).toContain('nav-active-border');
   });
 
   it('renders the AI signals navigation item and marks it active', () => {

@@ -120,7 +120,16 @@ const GapCard: React.FC<{ gap: DataInventoryGap; tableLabel: string; index: numb
   );
 };
 
-const DataInventoryPage: React.FC = () => {
+export interface DataInventoryPageProps {
+  /**
+   * 作为「数据」页（DataPage）里的一个 Tab 渲染时传 true：
+   * 外层的 AppPage 容器由 DataPage 统一提供，这里不再嵌套一层 <main>，
+   * 也避免双份横向内边距。独立路由 /data 单独访问时保持默认 false。
+   */
+  embedded?: boolean;
+}
+
+const DataInventoryPage: React.FC<DataInventoryPageProps> = ({ embedded = false }) => {
   const { language, t } = useUiLanguage();
   const [inventory, setInventory] = useState<DataInventory | null>(null);
   const [error, setError] = useState<ParsedApiError | null>(null);
@@ -191,9 +200,8 @@ const DataInventoryPage: React.FC = () => {
     }
     : null;
 
-  return (
-    <AppPage>
-      <div className="space-y-5">
+  const content = (
+    <div className="space-y-5">
         <PageHeader
           eyebrow={t('dataInventory.eyebrow')}
           title={t('dataInventory.title')}
@@ -355,9 +363,10 @@ const DataInventoryPage: React.FC = () => {
             )}
           </>
         ) : null}
-      </div>
-    </AppPage>
+    </div>
   );
+
+  return embedded ? content : <AppPage>{content}</AppPage>;
 };
 
 export default DataInventoryPage;

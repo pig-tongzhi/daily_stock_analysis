@@ -22,8 +22,9 @@ const PortfolioPage = lazy(() => import('./pages/PortfolioPage'));
 const DecisionSignalsPage = lazy(() => import('./pages/DecisionSignalsPage'));
 const AlertsPage = lazy(() => import('./pages/AlertsPage'));
 const IntelligencePage = lazy(() => import('./pages/IntelligencePage'));
-const TokenUsagePage = lazy(() => import('./pages/TokenUsagePage'));
-const DataInventoryPage = lazy(() => import('./pages/DataInventoryPage'));
+// 「数据」页 /data 与「用量」页 /usage 已合并为一个页面的两个 Tab（见 pages/DataPage.tsx）。
+// DataPage 会按 Tab 静态引入 DataInventoryPage / TokenUsagePage，因此这里不再单独 lazy 两个页面。
+const DataPage = lazy(() => import('./pages/DataPage'));
 const StockScreeningPage = lazy(() => import('./pages/StockScreeningPage'));
 
 const AppContent: React.FC = () => {
@@ -89,8 +90,9 @@ const AppContent: React.FC = () => {
         <Route path="/backtest" element={<BacktestPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/intelligence" element={<IntelligencePage />} />
-        <Route path="/usage" element={<TokenUsagePage />} />
-        <Route path="/data" element={<DataInventoryPage />} />
+        {/* 用量已并入数据页；/usage 保留原 URL，仅预选用量 Tab，不重定向。 */}
+        <Route path="/usage" element={<DataPage initialTab="usage" />} />
+        <Route path="/data" element={<DataPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

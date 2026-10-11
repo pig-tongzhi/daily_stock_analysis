@@ -7,8 +7,24 @@ import { historyApi } from '../../api/history';
 import { fetchIntelligenceItems, type IntelligenceItem } from '../../api/intelligence';
 import { screeningApi } from '../../api/screening';
 import { systemConfigApi } from '../../api/systemConfig';
-import { ApiErrorAlert, Badge, EmptyState, Loading, ScoreGauge } from '../common';
-import { HomePlayfulMascot } from './HomePlayfulMascot';
+import { ApiErrorAlert, Badge, Loading, ScoreGauge } from '../common';
+// 首页原本把卡片、标题、指标小块都写成本文件私有组件；现在统一走 components/playful，
+// 让其它页面能复用同一套「卡通友好」基元，而不是复制 Tailwind 类名。
+import {
+  PlayfulCard,
+  PlayfulChip,
+  PlayfulEmptyState,
+  PlayfulList,
+  PlayfulListItem,
+  PlayfulMascot,
+  PlayfulRankBadge,
+  PlayfulSection,
+  PlayfulSectionTitle,
+  PlayfulStat,
+  PlayfulStatGrid,
+  PlayfulTrack,
+  type PlayfulTrackTone,
+} from '../playful';
 import { useStockIndex } from '../../hooks/useStockIndex';
 import { useUiLanguage } from '../../contexts/UiLanguageContext';
 import type { UiLanguage, UiTextKey } from '../../i18n/uiText';
@@ -37,19 +53,14 @@ const RECENT_SIGNALS_LIMIT = 5;
 const NEWS_FETCH_LIMIT = 5;
 const NEWS_VISIBLE_LIMIT = 4;
 
+/** 稳定的空数组：避免 ?? [] 每次渲染产生新引用，触发下游 useMemo 反复计算。 */
+const EMPTY_STOCK_ITEMS: StockBarItem[] = [];
+
 /**
  * 策略条形图的四档低饱和色：只区分不同策略，不表达好坏，
  * 避免把“选股策略”渲染成红绿涨跌语义。
  */
-/** 稳定的空数组：避免 ?? [] 每次渲染产生新引用，触发下游 useMemo 反复计算。 */
-const EMPTY_STOCK_ITEMS: StockBarItem[] = [];
-
-const STRATEGY_BAR_TONES = [
-  'bg-[var(--playful-mint)]',
-  'bg-[var(--playful-grape)]',
-  'bg-[var(--playful-sun)]',
-  'bg-[var(--playful-down)]',
-];
+const STRATEGY_BAR_TONES: PlayfulTrackTone[] = ['mint', 'grape', 'sun', 'down'];
 
 const STATUS_LABEL_KEYS: Record<DecisionSignalStatus, UiTextKey> = {
   active: 'decisionSignals.active',
@@ -200,44 +211,6 @@ const ResourceError: React.FC<{ error: ParsedApiError; onRetry: () => void }> = 
   );
 };
 
-/** 卡通友好的分区标题：emoji 只作为区块标记，不承载语义。 */
-const PlayfulCardTitle: React.FC<{
-  emoji: string;
-  title: string;
-  meta?: string;
-  children?: React.ReactNode;
-}> = ({ emoji, title, meta, children }) => (
-  <div className="flex items-center gap-2">
-    <span className="text-base leading-none" aria-hidden="true">{emoji}</span>
-    <h3 className="text-sm font-semibold tracking-tight text-foreground">{title}</h3>
-    {meta ? <span className="ml-auto text-[11px] font-medium playful-ink-soft">{meta}</span> : null}
-    {children}
-  </div>
-);
-
-const StatChip: React.FC<{
-  label: string;
-  value: React.ReactNode;
-  tone: string;
-  testId?: string;
-}> = ({ label, value, tone, testId }) => (
-  <div className="playful-chip min-w-[4.5rem] px-3 py-2 text-center" data-testid={testId}>
-    <b className={`block text-lg font-extrabold leading-tight tabular-nums ${tone}`}>{value}</b>
-    <span className="text-[11px] font-semibold playful-ink-soft">{label}</span>
-  </div>
-);
-
-const MiniMetric: React.FC<{
-  label: string;
-  value: React.ReactNode;
-  tone?: string;
-}> = ({ label, value, tone }) => (
-  <div className="playful-chip px-1.5 py-1.5 text-center">
-    <b className={`block text-sm font-extrabold tabular-nums ${tone ?? 'text-foreground'}`}>{value}</b>
-    <span className="block text-[10px] font-semibold leading-tight playful-ink-soft">{label}</span>
-  </div>
-);
-
 export interface HomeDashboardProps {
   /** 首页已经通过 useWatchlist 拉取过的自选股代码；传入即复用，不再重复请求同一接口。 */
   watchlistCodes?: string[];
@@ -378,10 +351,10 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
   const benchmarkChange = formatSignedPercent(screeningTotal?.avgBenchmarkReturnPct ?? null);
 
   return (
-    <section className="mb-4 flex flex-col gap-4" data-testid="home-dashboard-cards">
+    <PlayfulSection className="mb-4" data-testid="home-dashboard-cards">
       {/* ---------- 问候条 ---------- */}
-      <div className="playful-hero flex flex-wrap items-center gap-4 px-5 py-4" data-testid="playful-hero">
-        <HomePlayfulMascot className="h-[72px] w-[104px] shrink-0" />
+      <PlayfulCard variant="hero" padding="none" className="flex flex-wrap items-center gap-4 px-5 py-4" data-testid="playful-hero">
+        <PlayfulMascot className="h-[72px] w-[104px] shrink-0" />
         <div className="min-w-[12rem] flex-1">
           <h2 className="text-lg font-extrabold tracking-tight text-foreground">
             {t('homeDashboard.playful.heroGreeting')}
@@ -397,32 +370,32 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
         </div>
         {stats.data ? (
           <div className="flex flex-wrap gap-2" data-testid="playful-hero-chips">
-            <StatChip
+            <PlayfulStat
               label={t('homeDashboard.playful.hitRate')}
               value={formatPercent(stats.data.hitRatePct)}
-              tone="text-[var(--playful-grape)]"
-              testId="playful-hero-hit-rate"
+              tone="grape"
+              data-testid="playful-hero-hit-rate"
             />
-            <StatChip
+            <PlayfulStat
               label={t('homeDashboard.playful.completed')}
               value={stats.data.completed}
-              tone="text-[var(--playful-mint)]"
-              testId="playful-hero-completed"
+              tone="mint"
+              data-testid="playful-hero-completed"
             />
-            <StatChip
+            <PlayfulStat
               label={t('homeDashboard.playful.unable')}
               value={stats.data.unable}
-              tone="text-[var(--playful-ink)]"
-              testId="playful-hero-unable"
+              tone="ink"
+              data-testid="playful-hero-unable"
             />
           </div>
         ) : null}
-      </div>
+      </PlayfulCard>
 
       {/* ---------- AI 建议 + 市场情绪 ---------- */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_1fr]">
-        <div className="playful-card flex flex-col p-4" data-testid="playful-ai-card">
-          <PlayfulCardTitle
+        <PlayfulCard className="flex flex-col" data-testid="playful-ai-card">
+          <PlayfulSectionTitle
             emoji="🎯"
             title={t('homeDashboard.aiSignals.title')}
             meta={t('homeDashboard.eyebrow')}
@@ -432,7 +405,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
           ) : stats.error ? (
             <ResourceError error={stats.error} onRetry={stats.reload} />
           ) : !stats.data || stats.data.total === 0 ? (
-            <EmptyState
+            <PlayfulEmptyState
               icon={<Activity className="h-6 w-6" />}
               title={t('homeDashboard.aiSignals.emptyTitle')}
               description={t('homeDashboard.aiSignals.emptyDescription')}
@@ -450,15 +423,15 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap gap-2">
-                  <span className="playful-pill px-2.5 py-1 text-xs font-bold">
+                  <PlayfulChip>
                     {t('homeDashboard.playful.hitRate')} <span className="tabular-nums">{formatPercent(stats.data.hitRatePct)}</span>
-                  </span>
-                  <span className="playful-pill px-2.5 py-1 text-xs font-bold">
+                  </PlayfulChip>
+                  <PlayfulChip>
                     {t('homeDashboard.aiSignals.completed')} <span className="tabular-nums">{stats.data.completed}</span>
-                  </span>
-                  <span className="playful-pill px-2.5 py-1 text-xs font-bold">
+                  </PlayfulChip>
+                  <PlayfulChip>
                     {t('homeDashboard.aiSignals.unable')} <span className="tabular-nums">{stats.data.unable}</span>
-                  </span>
+                  </PlayfulChip>
                 </div>
                 <p className="mt-2 text-xs font-semibold playful-ink-soft">
                   {t('homeDashboard.aiSignals.hitMiss', { hit: stats.data.hit, miss: stats.data.miss })}
@@ -473,12 +446,9 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                   ) : signalItems.length === 0 ? (
                     <p className="py-2 text-sm playful-ink-soft">{t('homeDashboard.aiSignals.noRecent')}</p>
                   ) : (
-                    <ul className="flex flex-col">
+                    <PlayfulList>
                       {signalItems.map((item) => (
-                        <li
-                          key={item.id}
-                          className="flex items-center gap-2 border-b border-dashed playful-dashed py-1.5 text-xs last:border-b-0"
-                        >
+                        <PlayfulListItem key={item.id}>
                           <span className="font-bold text-foreground">{item.stockName || item.stockCode}</span>
                           <span className="playful-ink-soft">
                             {item.stockCode} · {formatDateTime(item.createdAt, language)}
@@ -491,18 +461,18 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                               {t(STATUS_LABEL_KEYS[item.status])}
                             </Badge>
                           </span>
-                        </li>
+                        </PlayfulListItem>
                       ))}
-                    </ul>
+                    </PlayfulList>
                   )}
                 </div>
               </div>
             </div>
           )}
-        </div>
+        </PlayfulCard>
 
-        <div className="playful-card flex flex-col p-4" data-testid="playful-sentiment-card">
-          <PlayfulCardTitle
+        <PlayfulCard className="flex flex-col" data-testid="playful-sentiment-card">
+          <PlayfulSectionTitle
             emoji="🌡️"
             title={t('homeDashboard.playful.sentimentTitle')}
             meta={t('homeDashboard.playful.sentimentSubtitle')}
@@ -512,7 +482,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
           ) : marketReview.error ? (
             <ResourceError error={marketReview.error} onRetry={marketReview.reload} />
           ) : sentimentScore === null ? (
-            <EmptyState
+            <PlayfulEmptyState
               icon={<Activity className="h-6 w-6" />}
               title={fearGreedLabel}
               description={t('homeDashboard.playful.sentimentUnavailable')}
@@ -528,12 +498,13 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                   {sentimentScore}
                 </p>
               </div>
-              <div className="playful-track h-2 w-full overflow-hidden rounded-full">
-                <span
-                  className="block h-full rounded-full bg-[var(--playful-grape)]"
-                  style={{ width: `${Math.max(0, Math.min(100, sentimentScore))}%` }}
-                />
-              </div>
+              <PlayfulTrack
+                as="div"
+                size="sm"
+                tone="grape"
+                className="w-full"
+                value={Math.max(0, Math.min(100, sentimentScore))}
+              />
               {latestMarketReview ? (
                 <p className="playful-note w-full px-3 py-2 text-center text-[11px] font-bold">
                   {benchmarkChange
@@ -548,13 +519,13 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
               ) : null}
             </div>
           )}
-        </div>
+        </PlayfulCard>
       </div>
 
       {/* ---------- 今日资讯 + 选股复盘 ---------- */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.45fr_1fr]">
-        <div className="playful-card flex flex-col p-4" data-testid="playful-news-card">
-          <PlayfulCardTitle
+        <PlayfulCard className="flex flex-col" data-testid="playful-news-card">
+          <PlayfulSectionTitle
             emoji="📰"
             title={t('homeDashboard.news.title')}
           />
@@ -573,21 +544,21 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
           ) : news.error ? (
             <ResourceError error={news.error} onRetry={news.reload} />
           ) : newsItems.length === 0 ? (
-            <EmptyState
+            <PlayfulEmptyState
               icon={<Newspaper className="h-6 w-6" />}
               title={t('homeDashboard.news.emptyTitle')}
               description={t('homeDashboard.news.emptyDescription')}
             />
           ) : (
-            <ul className="mt-2 flex flex-col">
+            <PlayfulList className="mt-2">
               {newsItems.map((item: IntelligenceItem, index) => (
-                <li
+                <PlayfulListItem
                   key={item.id}
-                  className="flex gap-2.5 border-b border-dashed playful-dashed py-2 last:border-b-0"
+                  density="roomy"
                 >
-                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-lg bg-[var(--playful-tint-b)] text-[11px] font-extrabold text-[var(--playful-grape)]">
+                  <PlayfulRankBadge>
                     {index + 1}
-                  </span>
+                  </PlayfulRankBadge>
                   <div className="min-w-0">
                     {item.url ? (
                       <a
@@ -610,14 +581,14 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                       })}
                     </p>
                   </div>
-                </li>
+                </PlayfulListItem>
               ))}
-            </ul>
+            </PlayfulList>
           )}
-        </div>
+        </PlayfulCard>
 
-        <div className="playful-card flex flex-col p-4" data-testid="playful-screening-card">
-          <PlayfulCardTitle
+        <PlayfulCard className="flex flex-col" data-testid="playful-screening-card">
+          <PlayfulSectionTitle
             emoji="📈"
             title={t('homeDashboard.playful.screeningTitle')}
             meta={screeningTotal
@@ -632,7 +603,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
           ) : screening.error ? (
             <ResourceError error={screening.error} onRetry={screening.reload} />
           ) : !screeningTotal || screeningTotal.picks === 0 ? (
-            <EmptyState
+            <PlayfulEmptyState
               icon={<Activity className="h-6 w-6" />}
               title={t('homeDashboard.playful.screeningTitle')}
               description={t('homeDashboard.playful.screeningEmpty', { days: screeningWindowDays })}
@@ -653,12 +624,12 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                       <span className="w-[5.5rem] shrink-0 truncate text-xs font-bold playful-ink-soft">
                         {row.strategy}
                       </span>
-                      <span className="playful-track h-4 flex-1 overflow-hidden rounded-full">
-                        <span
-                          className={`block h-full rounded-full ${STRATEGY_BAR_TONES[index % STRATEGY_BAR_TONES.length]}`}
-                          style={{ width: `${width}%` }}
-                        />
-                      </span>
+                      <PlayfulTrack
+                        size="md"
+                        tone={STRATEGY_BAR_TONES[index % STRATEGY_BAR_TONES.length]}
+                        className="flex-1"
+                        value={width}
+                      />
                       <span className="w-12 shrink-0 text-right text-xs font-extrabold tabular-nums text-[var(--playful-mint)]">
                         {formatPercent(row.hitRate === null ? null : row.hitRate * 100, 0)}
                       </span>
@@ -668,30 +639,34 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
               </div>
               {/* 5 个指标必须一行放完：flex-wrap 会把第 5 个“跑赢基准”挤到单独一行，
                   看起来像漏了一项。这里用格网固定在 5 列（窄屏 2 列 / 中屏 3 列）。 */}
-              <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-5">
-                <MiniMetric label={t('homeDashboard.playful.screeningMetricPicks')} value={screeningTotal.picks} />
-                <MiniMetric
+              <PlayfulStatGrid className="mt-3">
+                <PlayfulStat size="sm" label={t('homeDashboard.playful.screeningMetricPicks')} value={screeningTotal.picks} />
+                <PlayfulStat
+                  size="sm"
                   label={t('homeDashboard.playful.screeningMetricHitRate')}
                   value={screeningTotal.hitRate === null ? '—' : formatPercent(screeningTotal.hitRate * 100, 0)}
-                  tone="text-[var(--playful-up)]"
+                  tone="up"
                 />
-                <MiniMetric
+                <PlayfulStat
+                  size="sm"
                   label={t('homeDashboard.playful.screeningMetricAvgReturn')}
                   value={screeningTotal.avgReturnPct === null ? '—' : formatSignedPercent(screeningTotal.avgReturnPct)}
-                  tone="text-[var(--playful-up)]"
+                  tone="up"
                 />
-                <MiniMetric
+                <PlayfulStat
+                  size="sm"
                   label={t('homeDashboard.playful.screeningMetricAvgExcess')}
                   value={screeningTotal.avgExcessReturnPct === null ? '—' : formatSignedPercent(screeningTotal.avgExcessReturnPct)}
-                  tone="text-[var(--playful-up)]"
+                  tone="up"
                 />
-                <MiniMetric
+                <PlayfulStat
+                  size="sm"
                   label={t('homeDashboard.playful.screeningMetricBeat')}
                   value={screeningTotal.beatBenchmarkRate === null
                     ? '—'
                     : formatPercent(screeningTotal.beatBenchmarkRate * 100, 0)}
                 />
-              </div>
+              </PlayfulStatGrid>
               {screeningTotal.benchmarkCode && benchmarkChange ? (
                 <p className="mt-3 text-[11px] font-semibold playful-ink-soft">
                   {t('homeDashboard.playful.screeningBenchmark', {
@@ -708,12 +683,12 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
               ) : null}
             </>
           )}
-        </div>
+        </PlayfulCard>
       </div>
 
       {/* ---------- 自选股 chips ---------- */}
-      <div className="playful-card p-4" data-testid="playful-watchlist-card">
-        <PlayfulCardTitle
+      <PlayfulCard data-testid="playful-watchlist-card">
+        <PlayfulSectionTitle
           emoji="⭐"
           title={t('homeDashboard.watchlist.title')}
           meta={watchlistCodesResolved.length > 0
@@ -728,7 +703,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
         ) : watchlist.error ? (
           <ResourceError error={watchlist.error} onRetry={watchlist.reload} />
         ) : watchlistCodesResolved.length === 0 ? (
-          <EmptyState
+          <PlayfulEmptyState
             icon={<Star className="h-6 w-6" />}
             title={t('homeDashboard.watchlist.emptyTitle')}
             description={t('homeDashboard.watchlist.emptyDescription')}
@@ -747,7 +722,14 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                 // StockBarItem 只有情绪分/建议/分析次数，没有行情涨跌字段。
                 // 没有真实来源就不展示，绝不用情绪分或建议反推一个涨跌幅。
                 return (
-                  <li key={code} className="playful-card-soft px-3 py-2" data-testid="playful-stock-chip">
+                  <PlayfulCard
+                    as="li"
+                    key={code}
+                    variant="soft"
+                    padding="none"
+                    className="px-3 py-2"
+                    data-testid="playful-stock-chip"
+                  >
                     <p className="truncate text-xs font-extrabold text-foreground">
                       {nameByCode.get(code.toUpperCase()) || code}
                     </p>
@@ -782,7 +764,7 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                         {formatClock(stockInfo.lastAnalysisTime, language)}
                       </p>
                     ) : null}
-                  </li>
+                  </PlayfulCard>
                 );
               })}
               <li
@@ -799,11 +781,11 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
             </ul>
           </>
         )}
-      </div>
+      </PlayfulCard>
 
       {/* ---------- 最近分析：保留原有历史列表，信息最完整 ---------- */}
-      <div className="playful-card p-4" data-testid="playful-history-card">
-        <PlayfulCardTitle
+      <PlayfulCard data-testid="playful-history-card">
+        <PlayfulSectionTitle
           emoji="🕒"
           title={t('homeDashboard.analysis.title')}
           meta={history.data ? t('homeDashboard.analysis.total', { total: history.data.total }) : undefined}
@@ -813,18 +795,15 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
         ) : history.error ? (
           <ResourceError error={history.error} onRetry={history.reload} />
         ) : historyItems.length === 0 ? (
-          <EmptyState
+          <PlayfulEmptyState
             icon={<History className="h-6 w-6" />}
             title={t('homeDashboard.analysis.emptyTitle')}
             description={t('homeDashboard.analysis.emptyDescription')}
           />
         ) : (
-          <ul className="mt-2 flex flex-col">
+          <PlayfulList className="mt-2">
             {historyItems.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center gap-2 border-b border-dashed playful-dashed py-1.5 text-xs last:border-b-0"
-              >
+              <PlayfulListItem key={item.id}>
                 <span className="font-bold text-foreground">{item.stockName || item.stockCode}</span>
                 <span className="playful-ink-soft">
                   {item.stockCode} · {formatDateTime(item.createdAt, language)}
@@ -834,12 +813,12 @@ export const HomeDashboard: React.FC<HomeDashboardProps> = ({
                     <Badge variant="info">{item.trendPrediction}</Badge>
                   </span>
                 ) : null}
-              </li>
+              </PlayfulListItem>
             ))}
-          </ul>
+          </PlayfulList>
         )}
-      </div>
-    </section>
+      </PlayfulCard>
+    </PlayfulSection>
   );
 };
 

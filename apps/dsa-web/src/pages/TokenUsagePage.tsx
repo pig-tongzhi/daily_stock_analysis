@@ -99,7 +99,16 @@ const ModelUsageCard: React.FC<{ model: UsageModelBreakdown; language: UiLanguag
   );
 };
 
-const TokenUsagePage: React.FC = () => {
+export interface TokenUsagePageProps {
+  /**
+   * 作为「数据」页（DataPage）里的「用量」Tab 渲染时传 true：
+   * 外层 AppPage 容器由 DataPage 统一提供，避免 <main> 嵌套与双份内边距。
+   * 旧的 /usage 路由与单元测试仍然直接渲染本组件（默认 false）。
+   */
+  embedded?: boolean;
+}
+
+const TokenUsagePage: React.FC<TokenUsagePageProps> = ({ embedded = false }) => {
   const { language, t } = useUiLanguage();
   const [period, setPeriod] = useState<UsagePeriod>('month');
   const [dashboard, setDashboard] = useState<UsageDashboard | null>(null);
@@ -141,9 +150,8 @@ const TokenUsagePage: React.FC = () => {
     return Math.max(...(dashboard?.byCallType.map((item) => item.totalTokens) ?? [0]), 1);
   }, [dashboard]);
 
-  return (
-    <AppPage>
-      <div className="space-y-5">
+  const content = (
+    <div className="space-y-5">
         <PageHeader
           eyebrow={t('usage.eyebrow')}
           title={t('usage.title')}
@@ -291,9 +299,10 @@ const TokenUsagePage: React.FC = () => {
             </section>
           </>
         ) : null}
-      </div>
-    </AppPage>
+    </div>
   );
+
+  return embedded ? content : <AppPage>{content}</AppPage>;
 };
 
 export default TokenUsagePage;

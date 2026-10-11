@@ -3080,3 +3080,47 @@ textarea {
   stroke: var(--playful-gauge-track);
 }
 
+/* -----------------------------------------
+   合并 Tab 条（数据 / 用量）
+   -----------------------------------------
+   用量已经并入「数据」页，合并后的页面需要一个 Tab 条。
+   它同样只用 --playful-* 令牌：暖色描边 + 胶囊圆角 + 选中态用点缀色，
+   不引入新的颜色常量，深色主题下自动跟着 .dark 的令牌走。 */
+.playful-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.25rem;
+  border: 1px solid var(--playful-border);
+  border-radius: 1rem;
+  background: var(--playful-surface);
+  box-shadow: var(--playful-shadow-soft);
+}
+
+.playful-tab {
+  border-radius: 0.75rem;
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--playful-ink-soft);
+  transition: background-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.playful-tab:hover {
+  background: var(--playful-chip-bg);
+  color: var(--playful-ink);
+}
+
+.playful-tab[aria-selected='true'] {
+  background: var(--playful-chip-bg);
+  color: var(--playful-grape);
+  box-shadow: var(--playful-shadow-soft);
+}
+
+.playful-tab:focus-visible {
+  outline: 2px solid var(--playful-grape);
+  outline-offset: 2px;
+}
+

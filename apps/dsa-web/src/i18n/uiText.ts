@@ -162,6 +162,10 @@ const zh = {
   'usage.totalCallsHint': '已记录的 LLM 调用',
   'usage.totalTokens': '总 tokens',
 
+  // ── 数据 / 用量合并页（DataPage）──
+  // Tab 文案直接复用侧栏入口名（layout.nav.data / layout.nav.usage），这里只放无障碍标签。
+  'dataPage.tabsLabel': '系统观测视图',
+
   // ── 数据观测（Data Inventory）──
   'dataInventory.title': '数据观测',
   'dataInventory.documentTitle': '数据观测 - rjharness',
@@ -1400,6 +1404,9 @@ const en: Record<UiTextKey, string> = {
   'usage.totalCalls': 'Calls',
   'usage.totalCallsHint': 'Recorded LLM calls',
   'usage.totalTokens': 'Total tokens',
+
+  // ── Merged data / usage page (DataPage) ──
+  'dataPage.tabsLabel': 'System observability views',
 
   // ── Data Inventory ──
   'dataInventory.title': 'Data inventory',
