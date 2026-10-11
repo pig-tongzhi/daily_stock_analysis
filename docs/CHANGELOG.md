@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [文档] 新增 `docs/architecture/OVERVIEW.md`：基于实测的架构现状、六个已确认的流程断裂点、四层单向流水线目标与分步改造路线
 - [修复] 选股 LLM 重排不再因响应被截断而静默降级。默认 `LLM_MAX_TOKENS=2048` 放不下排序 schema（每个候选 14 个字段、多为长中文说明），实测 5 个候选的响应在 4200+ 字符处被截断，JSON 尾部缺失后 `_extract_ranking_json` 解析失败，被记为 `no_json_found`，选股于是退回纯因子排序（`llm_ranked=false`）且只在日志留一行 WARNING。
 - [修复] 区分“响应被截断”与“确实没有 JSON”：新增 `_looks_like_truncated_json`（在字符串字面量之外统计括号配平），截断时报 `truncated_json` 并提示上调 `LLM_MAX_TOKENS`，不再误导为提示词问题。
 - [文档] 本地 `.env` 的 `LLM_MAX_TOKENS` 由注释默认值改为显式 `8192`（实测该值下 `llm_ranked=true`，每个候选都产出 `llm_score`/`llm_confidence`/`llm_thesis`）。
