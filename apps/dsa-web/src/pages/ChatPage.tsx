@@ -6,7 +6,10 @@ import { ChevronDown, SlidersHorizontal } from 'lucide-react';
 import { cn } from '../utils/cn';
 import { agentApi } from '../api/agent';
 import { systemConfigApi } from '../api/systemConfig';
-import { ApiErrorAlert, Badge, Button, ConfirmDialog, EmptyState, InlineAlert, ScrollArea, Tooltip } from '../components/common';
+import { ApiErrorAlert, Badge, Button, ConfirmDialog, InlineAlert, ScrollArea, Tooltip } from '../components/common';
+// 共享的「卡通友好」基元：只从 components/playful 引入，页面内不再自己拼一遍 Tailwind 类名串。
+// 这些基元同时提供了浅色暖奶油 / 深色暖灰两套观感，因此这里不需要写主题分支。
+import { PlayfulCard, PlayfulEmptyState, PlayfulMascot, PlayfulPage } from '../components/playful';
 import { createParsedApiError, getParsedApiError } from '../api/error';
 import type { AgentStatusResponse, SkillInfo } from '../api/agent';
 import { DashboardStateBlock } from '../components/dashboard';
@@ -997,16 +1000,18 @@ const ChatPage: React.FC = () => {
 
   const sidebarContent = (
     <>
-      <div className="flex items-center justify-between border-b border-white/5 bg-white/2 p-3.5">
-        <h2 className="text-sm font-semibold text-cyan uppercase tracking-[0.2em] flex items-center gap-2">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      {/* 侧栏头部：暖色分隔线 + 暖色软底；标题从品牌青改为 playful 墨色，
+          因为浅色主题下这是一张奶油卡片，冷色描边会显得「贴错主题」。 */}
+      <div className="flex items-center justify-between border-b border-[var(--playful-line)] bg-[var(--playful-surface-soft)] p-3.5">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.2em] text-[var(--playful-ink)]">
+          <svg className="w-5 h-5 text-[var(--playful-grape)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
           历史对话
         </h2>
         <button
           onClick={handleStartNewChat}
-          className="rounded-lg p-1.5 text-muted-text transition-all hover:bg-white/10 hover:text-foreground"
+          className="rounded-lg p-1.5 text-muted-text transition-all hover:bg-[var(--playful-chip-bg)] hover:text-foreground"
           aria-label="开启新对话"
         >
           <svg
@@ -1030,14 +1035,14 @@ const ChatPage: React.FC = () => {
             loading
             compact
             title="加载对话中..."
-            className="rounded-2xl border border-dashed border-border/50 bg-surface/30"
+            className="rounded-2xl border border-dashed border-[var(--playful-line)] bg-[var(--playful-surface)]"
           />
         ) : sessions.length === 0 ? (
           <DashboardStateBlock
             compact
             title="暂无历史对话"
             description="开始提问后，这里会保留会话记录。"
-            className="rounded-2xl border border-dashed border-border/50 bg-surface/30"
+            className="rounded-2xl border border-dashed border-[var(--playful-line)] bg-[var(--playful-surface)]"
           />
         ) : (
           <div className="space-y-2">
@@ -1046,7 +1051,10 @@ const ChatPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleSwitchSession(s.session_id)}
-                  className={`session-item ${s.session_id === sessionId ? 'active' : ''}`}
+                  // playful-chip 是 index.css 里的暖色小块（定义在 .session-item 之后，
+                  // 因此会覆盖它的中性底色）；.session-item.active / :hover 权重更高，
+                  // 选中态与悬停态仍然沿用原来的品牌青高亮，不会被这里的暖色吃掉。
+                  className={`session-item playful-chip ${s.session_id === sessionId ? 'active' : ''}`}
                   aria-label={`切换到对话 ${s.title}`}
                   aria-current={s.session_id === sessionId ? 'page' : undefined}
                 >
@@ -1103,14 +1111,16 @@ const ChatPage: React.FC = () => {
     : '通用分析';
 
   return (
-    <div
+    // bare：聊天页自己就是一个整屏工作区，只需要 playful 的暖色底，不需要 AppPage 的居中容器。
+    <PlayfulPage
+      bare
       data-testid="chat-workspace"
       className="flex h-[calc(100vh-5rem)] w-full min-w-0 gap-4 overflow-hidden sm:h-[calc(100vh-5.5rem)] lg:h-[calc(100vh-2rem)]"
     >
-      {/* Desktop sidebar */}
-      <div className="hidden h-full w-64 flex-shrink-0 flex-col overflow-hidden rounded-[1.25rem] border border-white/8 bg-card/82 shadow-soft-card md:flex">
+      {/* Desktop sidebar：改用 playful 卡片（暖边框 + 贴纸阴影），与首页侧栏同一套语言 */}
+      <PlayfulCard padding="none" className="hidden h-full w-64 flex-shrink-0 flex-col overflow-hidden md:flex">
         {sidebarContent}
-      </div>
+      </PlayfulCard>
 
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
@@ -1119,8 +1129,10 @@ const ChatPage: React.FC = () => {
           onClick={() => setSidebarOpen(false)}
         >
           <div className="page-drawer-overlay absolute inset-0" />
+          {/* 抽屉贴着屏幕左边，所以这里不用 PlayfulCard（它的 20px 全圆角会在左边缘露出底色），
+              改为直接引用同一组 --playful-* 令牌，保证冷暖与桌面侧栏一致。 */}
           <div
-            className="absolute left-0 top-0 bottom-0 w-72 flex flex-col glass-card overflow-hidden border-r border-white/10 bg-card/90 shadow-2xl"
+            className="absolute left-0 top-0 bottom-0 w-72 flex flex-col overflow-hidden border-r border-[var(--playful-border)] bg-[var(--playful-surface)] shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             {sidebarContent}
@@ -1143,7 +1155,10 @@ const ChatPage: React.FC = () => {
       {/* Main chat area */}
       <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
         <header className="mb-4 flex-shrink-0 space-y-3">
-          <div className="flex items-start justify-between gap-4">
+          {/* 问候条：从裸标题改成 playful hero（三块低饱和点缀色的暖渐变）。
+              吉祥物只是装饰，aria-hidden，不进入 h1 的可访问名，保证 heading 仍叫「问股」。 */}
+          <PlayfulCard variant="hero" padding="md" className="relative overflow-hidden">
+            <div className="flex items-start justify-between gap-4">
             <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
               <button
                 onClick={() => setSidebarOpen(true)}
@@ -1282,9 +1297,14 @@ const ChatPage: React.FC = () => {
               </div>
             )}
           </div>
-          <p className="text-secondary-text text-sm">
-            {t(agentStatus?.backend === 'codex_app_server' ? 'chat.introCodex' : 'chat.introDefault')}
-          </p>
+            {/* 说明文字与吉祥物同排：让问候条底部有内容托底，而不是一段孤零零的小字 */}
+            <div className="mt-2 flex items-end justify-between gap-3">
+              <p className="text-secondary-text text-sm">
+                {t(agentStatus?.backend === 'codex_app_server' ? 'chat.introCodex' : 'chat.introDefault')}
+              </p>
+              <PlayfulMascot className="hidden h-14 w-20 flex-shrink-0 sm:block" />
+            </div>
+          </PlayfulCard>
           {agentStatus?.backend === 'codex_app_server' ? (
             <InlineAlert
               variant="warning"
@@ -1312,7 +1332,8 @@ const ChatPage: React.FC = () => {
           ) : null}
         </header>
 
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden border border-white/6 bg-card/78 glass-card">
+        {/* 消息区容器：暖边框 + 贴纸阴影的 playful 卡片（原来是无彩色 glass 面板） */}
+        <PlayfulCard padding="none" className="relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden">
           {/* Messages */}
           <ScrollArea
             className="relative z-10 flex-1"
@@ -1323,14 +1344,14 @@ const ChatPage: React.FC = () => {
           >
             {messages.length === 0 && !loading ? (
               <div className="flex h-full items-center justify-center">
-                <EmptyState
+                <PlayfulEmptyState
                   title="开始问股"
                   description={t(
                     agentStatus?.backend === 'codex_app_server'
                       ? 'chat.emptyDescriptionCodex'
                       : 'chat.emptyDescriptionDefault',
                   )}
-                  className="max-w-2xl border-dashed bg-card/55"
+                  className="max-w-2xl playful-dashed"
                   icon={(
                     <svg
                       className="h-8 w-8"
@@ -1342,7 +1363,7 @@ const ChatPage: React.FC = () => {
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         strokeWidth={1.5}
-                        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707-.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
                       />
                     </svg>
                   )}
@@ -1353,7 +1374,9 @@ const ChatPage: React.FC = () => {
                           key={i}
                           onClick={() => handleQuickQuestion(q)}
                           disabled={!agentAvailable || stockIndexLoading}
-                          className="quick-question-btn disabled:cursor-not-allowed disabled:opacity-60"
+                          // playful-chip 提供暖色小块底色与贴纸阴影（index.css 中定义在
+                          // .quick-question-btn 之后，覆盖其冷色底）；hover 仍由原类控权。
+                          className="quick-question-btn playful-chip disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           {q.label}
                         </button>
@@ -1368,20 +1391,24 @@ const ChatPage: React.FC = () => {
                 return (
                 <div
                   key={msg.id}
-                  className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+                  className={`flex items-end gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
                 >
                   <div
                     className={cn(
-                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[10px] font-bold shadow-sm transition-all',
+                      'flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[10px] font-bold shadow-[var(--playful-shadow-soft)] transition-all',
                       msg.role === 'user' ? 'chat-avatar-user' : 'chat-avatar-ai'
                     )}
                   >
                     {msg.role === 'user' ? 'U' : 'AI'}
                   </div>
+                  {/* 用户气泡沿用既有品牌青底 + 右侧小尖角；助手气泡换成 playful 的暖色软卡，
+                      两边在底色、圆角、对齐方向上都不同，扫一眼就能分清谁在说话。 */}
                   <div
                     className={cn(
                       'group/message min-w-0 w-fit max-w-[min(100%,48rem)] overflow-hidden px-5 py-3.5 transition-colors',
-                      msg.role === 'user' ? 'chat-bubble-user' : 'chat-bubble-ai'
+                      msg.role === 'user'
+                        ? 'chat-bubble-user shadow-[var(--playful-shadow-soft)]'
+                        : 'playful-card-soft'
                     )}
                   >
                     {msg.role === 'assistant' && (skillLabel || msg.backend) && (
@@ -1459,11 +1486,13 @@ const ChatPage: React.FC = () => {
             )}
 
             {loading && (
-              <div className="flex gap-4">
-                <div className="w-8 h-8 rounded-full bg-elevated text-foreground flex items-center justify-center flex-shrink-0 text-xs font-bold">
+              // 流式等待中的气泡与助手气泡保持同一套外观（暖色软卡 + AI 头像），
+              // 这样「正在生成」看起来是同一条回复的延续，而不是另一个组件。
+              <div className="flex items-end gap-3">
+                <div className="chat-avatar-ai flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[10px] font-bold">
                   AI
                 </div>
-                <div className="min-w-[200px] max-w-[min(100%,48rem)] overflow-hidden rounded-2xl rounded-tl-sm border border-white/6 bg-card/72 px-5 py-4">
+                <div className="playful-card-soft min-w-[200px] max-w-[min(100%,48rem)] overflow-hidden px-5 py-4">
                   <div className="flex items-center gap-2.5 text-sm text-secondary-text">
                     <div className="relative w-4 h-4 flex-shrink-0">
                       <div className="absolute inset-0 rounded-full border-2 border-cyan/20" />
@@ -1509,8 +1538,8 @@ const ChatPage: React.FC = () => {
             </div>
           )}
 
-          {/* Input area */}
-          <div className="border-t border-white/6 bg-card/88 p-4 md:p-6 relative z-20">
+          {/* Input area：暖色软表面 + 暖色分隔线，把「阅读区」和「书写区」分成两层 */}
+          <div className="relative z-20 border-t border-[var(--playful-line)] bg-[var(--playful-surface)] p-4 md:p-6">
             <div className="space-y-3">
               {chatError ? <ApiErrorAlert error={chatError} /> : null}
               {terminalStatus === 'cancelled' ? (
@@ -1716,7 +1745,7 @@ const ChatPage: React.FC = () => {
                   placeholder="例如：分析 600519 / 茅台现在适合买入吗？ (Enter 发送, Shift+Enter 换行)"
                   disabled={loading || !agentAvailable}
                   rows={1}
-                  className="input-surface input-focus-glow flex-1 min-h-[44px] max-h-[200px] rounded-xl border bg-transparent px-4 py-2.5 text-sm transition-all focus:outline-none resize-none disabled:cursor-not-allowed disabled:opacity-60"
+                  className="input-surface input-focus-glow flex-1 min-h-[44px] max-h-[200px] rounded-2xl border bg-transparent px-4 py-2.5 text-sm transition-all focus:outline-none resize-none disabled:cursor-not-allowed disabled:opacity-60"
                   style={{ height: 'auto' }}
                   onInput={(e) => {
                     const t = e.target as HTMLTextAreaElement;
@@ -1745,11 +1774,15 @@ const ChatPage: React.FC = () => {
                   </Button>
                 )}
               </div>
+              {/* 输入提示：把「Enter 发送」从 placeholder 里独立出来，窄屏 placeholder 会被截断 */}
+              <p className="playful-ink-soft text-[11px]">
+                {t('chatPage.composerHint')}
+              </p>
             </div>
           </div>
-        </div>
+        </PlayfulCard>
       </div>
-    </div>
+    </PlayfulPage>
   );
 };
 

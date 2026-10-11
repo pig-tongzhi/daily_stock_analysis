@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [改进] 问股页套用「卡通友好」风格：暖色问候条 + 吉祥物、用户/助手气泡视觉分离、空态与快捷问题改为暖色卡片、输入区加键盘提示
+- [改进] 持仓页套用「卡通友好」风格：新增「组合概览」数字卡（总权益/总市值/总现金/未实现盈亏）、持仓卡与空态改造，盈亏数字成为视觉焦点
+- [改进] 选股页套用「卡通友好」风格：运行表单、复盘区、历史列表改造；策略对比用进度条呈现；新增常驻的「命中率只按可复盘样本计算」口径说明
+- [修复] **涨跌配色统一为 A 股约定（红涨绿跌）**。此前持仓/选股页用 `text-success`(绿) 表示上涨，与首页新设计系统（`--playful-up` 为红）不一致；现全站统一为红涨绿跌，并同步修正对应的测试断言
+- [修复] `PlayfulChip` 的 `tone` 语义色**从未生效**：其实现用 Tailwind 任意值类 `text-[var(--playful-*)]`，但该类**不会被 Tailwind v4 编译进产物**，导致所有 chip 恒为深灰、语义色被静默吞掉。改用显式 CSS 类（`.playful-pill-grape` 等）修复，实测六个 tone 恢复为六种颜色
+- [修复] `index.css` 中会设置 `color` 的 playful 类（`.playful-pill` / `.playful-note` / `.playful-ink-soft` / `.playful-tab`）原先位于所有 `@layer` 之外，会压过 Tailwind 的 `text-*` 工具类；已移入 `@layer components`，工具类可正常覆盖
 - [改进] Web 侧栏入口由 11 项收敛为 8 项：告警（功能完全未使用，四张告警表全空）与回测（两张回测表全空）从侧栏下线，用量并入「数据」页作为第二个 Tab。页面、API 与路由全部保留：`/alerts`、`/backtest` 仍可直接访问，`/usage` 保留原 URL 并预选用量 Tab（不做重定向）。隐藏项由 `SidebarNav` 的 `hiddenByDefault` 统一开关控制（与既有 `showScreeningNav` 同一套过滤机制），恢复入口只需把该值改回 `false`。
 - [新功能] 抽出可复用的「卡通友好」前端基元 `apps/dsa-web/src/components/playful/`（页面/区块壳、圆角卡片、区块标题、指标小块与栅格、胶囊标签与序号徽标、列表、进度轨道、空态），并复用首页既有的内联 SVG 吉祥物；首页改为消费这些基元，渲染结果不变（`--playful-*` 令牌、暖奶油浅色主题与暖调深色主题、A 股红涨绿跌语义均保持不变）。
 - [测试] 新增 `apps/dsa-web/tests/nav_convergence.test.ts`（隐藏 ≠ 删除：入口定义、目标路由、页面路由三者在位）与 `apps/dsa-web/src/pages/__tests__/DataPage.test.tsx`（Tab 契约与 `/usage` 兼容），并更新 `SidebarNav.test.tsx`（8 项入口、顺序、`/usage` 高亮「数据」）；`vitest run` 1285 passed（仅既有 DecisionSignalsPage 用例失败）

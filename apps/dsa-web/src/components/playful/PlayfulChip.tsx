@@ -13,13 +13,15 @@ export type PlayfulChipTone = 'default' | 'soft' | 'grape' | 'mint' | 'sun' | 'u
 export type PlayfulChipSize = 'sm' | 'md';
 
 const TONE_STYLES: Record<PlayfulChipTone, string> = {
+  // 用显式 CSS 类而非 Tailwind 任意值：实测 text-[var(--playful-*)]
+  // 不会被 Tailwind v4 编译进产物，语义色会静默失效（全部退回 --playful-ink）。
   default: '',
-  soft: 'text-[var(--playful-ink-soft)]',
-  grape: 'text-[var(--playful-grape)]',
-  mint: 'text-[var(--playful-mint)]',
-  sun: 'text-[var(--playful-sun)]',
-  up: 'text-[var(--playful-up)]',
-  down: 'text-[var(--playful-down)]',
+  soft: 'playful-pill-soft',
+  grape: 'playful-pill-grape',
+  mint: 'playful-pill-mint',
+  sun: 'playful-pill-sun',
+  up: 'playful-pill-up',
+  down: 'playful-pill-down',
 };
 
 const SIZE_STYLES: Record<PlayfulChipSize, string> = {

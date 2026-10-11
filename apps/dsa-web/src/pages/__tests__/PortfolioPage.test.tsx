@@ -574,7 +574,9 @@ describe('PortfolioPage FX refresh', () => {
 
     const hkRowCells = within(hkRow as HTMLTableRowElement).getAllByRole('cell');
     const aaplRowCells = within(aaplRow as HTMLTableRowElement).getAllByRole('cell');
-    expect(hkRowCells.at(-3)).toHaveClass('text-success');
+    // A 股习惯是红涨绿跌：+5.00% 的盈利行走 text-danger（红），缺价行退回中性色。
+    // 这里只是盈亏方向的样式断言，数值断言仍在上面几条。
+    expect(hkRowCells.at(-3)).toHaveClass('text-danger');
     expect(aaplRowCells.at(-3)).toHaveClass('text-secondary');
   });
 

@@ -5,8 +5,19 @@ import { decisionSignalsApi } from '../api/decisionSignals';
 import { portfolioApi } from '../api/portfolio';
 import type { ParsedApiError } from '../api/error';
 import { getParsedApiError } from '../api/error';
-import { ApiErrorAlert, Card, Badge, ConfirmDialog, EmptyState, InlineAlert } from '../components/common';
+import { ApiErrorAlert, ConfirmDialog, InlineAlert } from '../components/common';
 import { PortfolioSignalSummary } from '../components/decision-signals/DecisionSignalDisplay';
+// 卡片/指标/空态统一走首页那套 playful 基元，本页不再各自拼类名串，保证两个页面观感一致。
+import {
+  PlayfulCard,
+  PlayfulEmptyState,
+  PlayfulMascot,
+  PlayfulPage,
+  PlayfulSection,
+  PlayfulSectionTitle,
+  PlayfulStat,
+  PlayfulStatGrid,
+} from '../components/playful';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import { formatUiText } from '../i18n/uiText';
 import { PORTFOLIO_TEXT } from '../locales/featureText';
@@ -958,16 +969,22 @@ const PortfolioPage: React.FC = () => {
     : null;
 
   return (
-    <div className="portfolio-page min-h-screen space-y-4 p-4 md:p-6">
-      <section className="space-y-3">
-        <div className="space-y-2">
-          <h1 className="text-xl md:text-2xl font-semibold text-foreground">{text.title}</h1>
-          <p className="text-xs md:text-sm text-secondary">
-            {text.description}
-          </p>
-        </div>
+    // 保留 portfolio-page 类名：index.css 里浅色主题的按钮观感依赖它，不能丢。
+    <PlayfulPage bare className="portfolio-page min-h-screen space-y-4 p-4 md:p-6">
+      <PlayfulSection>
+        {/* 顶部问候条与首页 hero 卡同构（吉祥物 + 标题 + 指标 chip），让两个页面看起来像同一套产品 */}
+        <PlayfulCard variant="hero" padding="none" className="flex flex-wrap items-center gap-4 px-5 py-4">
+          <PlayfulMascot className="h-[72px] w-[104px] shrink-0" />
+          <div className="min-w-[12rem] flex-1">
+            <h1 className="text-lg font-extrabold tracking-tight text-foreground md:text-xl">{text.title}</h1>
+            <p className="mt-1 text-xs font-semibold playful-ink-soft">{text.description}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <PlayfulStat label={t('portfolioPage.heroHoldings')} value={positionRows.length} tone="grape" />
+          </div>
+        </PlayfulCard>
         {hasAccounts ? (
-          <div className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+          <PlayfulCard padding="sm">
             <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_220px_280px] gap-2 items-end">
               <div>
                 <p className="text-xs text-secondary mb-1">{text.accountView}</p>
@@ -1025,7 +1042,7 @@ const PortfolioPage: React.FC = () => {
                 </button>
               </div>
             </div>
-          </div>
+          </PlayfulCard>
         ) : (
           <InlineAlert
             variant="warning"
@@ -1033,7 +1050,7 @@ const PortfolioPage: React.FC = () => {
             message={text.noAccounts}
           />
         )}
-      </section>
+      </PlayfulSection>
 
       {error ? <ApiErrorAlert error={error} onDismiss={() => setError(null)} /> : null}
       {riskWarning ? (
@@ -1059,9 +1076,9 @@ const PortfolioPage: React.FC = () => {
       ) : null}
 
       {(showCreateAccount || !hasAccounts) ? (
-        <Card padding="md">
+        <PlayfulCard padding="md">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-foreground">新建账户</h2>
+            <PlayfulSectionTitle as="h2" emoji="🆕" title="新建账户" />
             {hasAccounts ? (
               <button
                 type="button"
@@ -1129,7 +1146,7 @@ const PortfolioPage: React.FC = () => {
               {accountCreating ? '创建中...' : '创建账户'}
             </button>
           </form>
-        </Card>
+        </PlayfulCard>
       ) : null}
 
       {snapshotQualityMessage ? (
@@ -1141,49 +1158,77 @@ const PortfolioPage: React.FC = () => {
         />
       ) : null}
 
-      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        <Card variant="gradient" padding="md">
-          <p className="text-xs text-secondary">{text.totalEquity}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{formatMoney(snapshot?.totalEquity, snapshot?.currency || 'CNY')}</p>
-        </Card>
-        <Card variant="gradient" padding="md">
-          <p className="text-xs text-secondary">{text.totalMarketValue}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{formatMoney(snapshot?.totalMarketValue, snapshot?.currency || 'CNY')}</p>
-        </Card>
-        <Card variant="gradient" padding="md">
-          <p className="text-xs text-secondary">{text.totalCash}</p>
-          <p className="mt-1 text-xl font-semibold text-foreground">{formatMoney(snapshot?.totalCash, snapshot?.currency || 'CNY')}</p>
-        </Card>
-        <Card variant="gradient" padding="md">
-          <div className="flex items-start justify-between gap-3">
-            <p className="text-xs text-secondary">{text.fxStatus}</p>
-            <button
-              type="button"
-              className="btn-secondary !px-3 !py-1 !text-xs shrink-0"
-              onClick={() => void handleRefreshFx()}
-              disabled={!hasAccounts || isLoading || fxRefreshing}
-            >
-              {fxRefreshing ? text.refreshing : text.refreshFx}
-            </button>
-          </div>
-          <div className="mt-2">{snapshot?.fxStale ? <Badge variant="warning">{text.stale}</Badge> : <Badge variant="success">{text.latest}</Badge>}</div>
-          {fxRefreshFeedback ? (
-            <InlineAlert
-              variant={getFxRefreshFeedbackVariant(fxRefreshFeedback.tone)}
-              title={text.fxRefreshResult}
-              message={fxRefreshFeedback.text}
-              className="mt-3 rounded-xl px-3 py-2 text-xs shadow-none"
-            />
-          ) : null}
-        </Card>
-      </section>
+      {/* 组合概览：指标块全走 PlayfulStat/PlayfulStatGrid；未实现盈亏做成视觉焦点
+          （A 股习惯：红涨绿跌，tone up 即 --playful-up 红色），其余数字保持中性色。 */}
+      <PlayfulCard className="flex flex-col">
+        <PlayfulSectionTitle
+          as="h2"
+          emoji="💰"
+          title={t('portfolioPage.summaryTitle')}
+          meta={formatUiText(t('portfolioPage.summaryMeta'), { currency: snapshot?.currency || 'CNY' })}
+        >
+          <button
+            type="button"
+            className="btn-secondary !px-3 !py-1 !text-xs shrink-0"
+            onClick={() => void handleRefreshFx()}
+            disabled={!hasAccounts || isLoading || fxRefreshing}
+          >
+            {fxRefreshing ? text.refreshing : text.refreshFx}
+          </button>
+        </PlayfulSectionTitle>
+        <PlayfulStatGrid className="mt-3">
+          <PlayfulStat
+            label={text.totalEquity}
+            value={formatMoney(snapshot?.totalEquity, snapshot?.currency || 'CNY')}
+            tone="ink"
+          />
+          <PlayfulStat
+            label={text.totalMarketValue}
+            value={formatMoney(snapshot?.totalMarketValue, snapshot?.currency || 'CNY')}
+            tone="ink"
+          />
+          <PlayfulStat
+            label={text.totalCash}
+            value={formatMoney(snapshot?.totalCash, snapshot?.currency || 'CNY')}
+            tone="soft"
+          />
+          <PlayfulStat
+            label={t('portfolioPage.totalUnrealizedPnl')}
+            value={formatMoney(snapshot?.unrealizedPnl, snapshot?.currency || 'CNY')}
+            tone={
+              snapshot === null || snapshot.unrealizedPnl === undefined || snapshot.unrealizedPnl === null
+                ? 'soft'
+                : snapshot.unrealizedPnl >= 0
+                  ? 'up'
+                  : 'down'
+            }
+            className="ring-1 ring-[var(--playful-border)] [&>b]:text-xl"
+          />
+          <PlayfulStat
+            label={text.fxStatus}
+            value={snapshot?.fxStale ? text.stale : text.latest}
+            tone={snapshot?.fxStale ? 'sun' : 'mint'}
+          />
+        </PlayfulStatGrid>
+        {fxRefreshFeedback ? (
+          <InlineAlert
+            variant={getFxRefreshFeedbackVariant(fxRefreshFeedback.tone)}
+            title={text.fxRefreshResult}
+            message={fxRefreshFeedback.text}
+            className="mt-3 rounded-xl px-3 py-2 text-xs shadow-none"
+          />
+        ) : null}
+      </PlayfulCard>
 
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-        <Card className="xl:col-span-2" padding="md">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-foreground">{text.positionsTitle}</h2>
-            <span className="text-xs text-secondary">{formatUiText(text.countItems, { count: positionRows.length })}</span>
-          </div>
+      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <PlayfulCard className="xl:col-span-2" padding="md">
+          <PlayfulSectionTitle
+            as="h2"
+            emoji="📈"
+            className="mb-3"
+            title={text.positionsTitle}
+            meta={formatUiText(text.countItems, { count: positionRows.length })}
+          />
           {portfolioSignalsWarning ? (
             <InlineAlert
               variant="warning"
@@ -1193,7 +1238,7 @@ const PortfolioPage: React.FC = () => {
             />
           ) : null}
           {positionRows.length === 0 ? (
-            <EmptyState
+            <PlayfulEmptyState
               title={text.noPositionsTitle}
               description={text.noPositionsDescription}
               className="border-none bg-transparent px-4 py-8 shadow-none"
@@ -1201,7 +1246,7 @@ const PortfolioPage: React.FC = () => {
           ) : (
             <div className="overflow-x-auto">
               <table className="min-w-[860px] w-full text-sm">
-                <thead className="text-xs text-secondary border-b border-white/10">
+                <thead className="text-[11px] font-semibold playful-ink-soft border-b border-dashed playful-dashed">
                   <tr>
                     <th className="text-left py-2 pr-2">{text.account}</th>
                     <th className="text-left py-2 pr-2">{text.code}</th>
@@ -1221,7 +1266,7 @@ const PortfolioPage: React.FC = () => {
                     const analyzing = positionAnalysisLoadingKey === rowKey;
                     const signal = signalByPositionKey.get(rowKey);
                     return (
-                    <tr key={rowKey} className="border-b border-white/5">
+                    <tr key={rowKey} className="border-b border-dashed playful-dashed last:border-b-0">
                       <td className="py-2 pr-2 text-secondary">{row.accountName}</td>
                       <td className="py-2 pr-2 font-mono text-foreground">{row.symbol}</td>
                       <td className="py-2 pr-2 text-right">{row.quantity.toFixed(2)}</td>
@@ -1233,23 +1278,25 @@ const PortfolioPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="py-2 pr-2 text-right">{formatPositionMoney(row.marketValueBase, row)}</td>
+                      {/* 盈亏是这一页用户真正关心的数字：加粗放大 + A 股红涨绿跌
+                          （text-danger 红＝盈利，text-success 绿＝亏损），缺价时退回中性色。 */}
                       <td
-                        className={`py-2 pr-3 text-right ${
+                        className={`py-2 pr-3 text-right text-sm font-extrabold tabular-nums ${
                           hasPositionPrice(row)
                             ? row.unrealizedPnlBase >= 0
-                              ? 'text-success'
-                              : 'text-danger'
+                              ? 'text-danger'
+                              : 'text-success'
                             : 'text-secondary'
                         }`}
                       >
                         {formatPositionMoney(row.unrealizedPnlBase, row)}
                       </td>
                       <td
-                        className={`py-2 pr-3 text-right ${
+                        className={`py-2 pr-3 text-right text-sm font-extrabold tabular-nums ${
                           hasPositionPrice(row) && row.unrealizedPnlPct !== null && row.unrealizedPnlPct !== undefined
                             ? row.unrealizedPnlPct >= 0
-                              ? 'text-success'
-                              : 'text-danger'
+                              ? 'text-danger'
+                              : 'text-success'
                             : 'text-secondary'
                         }`}
                       >
@@ -1275,12 +1322,15 @@ const PortfolioPage: React.FC = () => {
               </table>
             </div>
           )}
-        </Card>
+        </PlayfulCard>
 
-        <Card padding="md">
-          <h2 className="text-sm font-semibold text-foreground mb-3">
-            {concentrationMode === 'sector' ? text.sectorConcentration : text.positionConcentrationFallback}
-          </h2>
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle
+            as="h2"
+            emoji="🥧"
+            className="mb-3"
+            title={concentrationMode === 'sector' ? text.sectorConcentration : text.positionConcentrationFallback}
+          />
           {concentrationPieData.length > 0 ? (
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -1296,7 +1346,7 @@ const PortfolioPage: React.FC = () => {
               </ResponsiveContainer>
             </div>
           ) : (
-            <EmptyState
+            <PlayfulEmptyState
               title={text.noConcentrationTitle}
               description={text.noConcentrationDescription}
               className="border-none bg-transparent px-4 py-10 shadow-none"
@@ -1307,7 +1357,7 @@ const PortfolioPage: React.FC = () => {
             <div>{text.sectorAlert}: {risk?.sectorConcentration?.alert ? text.yes : text.no}</div>
             <div>{text.topWeight}: {formatPct(risk?.sectorConcentration?.topWeightPct ?? risk?.concentration?.topWeightPct)}</div>
           </div>
-        </Card>
+        </PlayfulCard>
       </section>
 
       {writeBlocked && hasAccounts ? (
@@ -1318,33 +1368,33 @@ const PortfolioPage: React.FC = () => {
         />
       ) : null}
 
-      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-2">{text.drawdownMonitor}</h3>
+      <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="📉" className="mb-2" title={text.drawdownMonitor} />
           <div className="text-xs text-secondary space-y-1">
             <div>{text.maxDrawdown}: {formatPct(risk?.drawdown?.maxDrawdownPct)}</div>
             <div>{text.currentDrawdown}: {formatPct(risk?.drawdown?.currentDrawdownPct)}</div>
             <div>{text.alert}: {risk?.drawdown?.alert ? text.yes : text.no}</div>
           </div>
-        </Card>
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-2">{text.stopLossWarning}</h3>
+        </PlayfulCard>
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="🛡️" className="mb-2" title={text.stopLossWarning} />
           <div className="text-xs text-secondary space-y-1">
             <div>{text.triggeredCount}: {risk?.stopLoss?.triggeredCount ?? 0}</div>
             <div>{text.nearCount}: {risk?.stopLoss?.nearCount ?? 0}</div>
             <div>{text.alert}: {risk?.stopLoss?.nearAlert ? text.yes : text.no}</div>
           </div>
-        </Card>
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-2">{text.scope}</h3>
+        </PlayfulCard>
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="🧭" className="mb-2" title={text.scope} />
           <div className="text-xs text-secondary space-y-1">
             <div>{text.accountCount}: {snapshot?.accountCount ?? 0}</div>
             <div>{text.currency}: {snapshot?.currency || 'CNY'}</div>
             <div>{text.costMethodShort}: {(snapshot?.costMethod || costMethod).toUpperCase()}</div>
           </div>
-        </Card>
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-2">{text.aiRiskSignals}</h3>
+        </PlayfulCard>
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="🤖" className="mb-2" title={text.aiRiskSignals} />
           <div className="text-xs text-secondary space-y-1">
             {risk?.decisionSignalRisk?.available === false ? (
               <div className="text-warning">{text.aiRiskUnavailable}</div>
@@ -1368,12 +1418,12 @@ const PortfolioPage: React.FC = () => {
               </>
             )}
           </div>
-        </Card>
+        </PlayfulCard>
       </section>
 
-      <section className="grid grid-cols-1 xl:grid-cols-3 gap-3">
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-3">手工录入：交易</h3>
+      <section className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="🧾" className="mb-3" title="手工录入：交易" />
           <form className="space-y-2" onSubmit={handleTradeSubmit}>
             <input className={PORTFOLIO_INPUT_CLASS} placeholder="股票代码（例如 600519）" value={tradeForm.symbol}
               onChange={(e) => setTradeForm((prev) => ({ ...prev, symbol: e.target.value }))} required />
@@ -1401,10 +1451,10 @@ const PortfolioPage: React.FC = () => {
             <p className="text-xs text-secondary">手续费和税费可留空，系统将按 0 处理。</p>
             <button type="submit" className="btn-secondary w-full" disabled={!writableAccountId}>提交交易</button>
           </form>
-        </Card>
+        </PlayfulCard>
 
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-3">手工录入：资金流水</h3>
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="💵" className="mb-3" title="手工录入：资金流水" />
           <form className="space-y-2" onSubmit={handleCashSubmit}>
             <div className="grid grid-cols-2 gap-2">
               <input className={PORTFOLIO_INPUT_CLASS} type="date" value={cashForm.eventDate}
@@ -1421,10 +1471,10 @@ const PortfolioPage: React.FC = () => {
               onChange={(e) => setCashForm((prev) => ({ ...prev, currency: e.target.value }))} />
             <button type="submit" className="btn-secondary w-full" disabled={!writableAccountId}>提交资金流水</button>
           </form>
-        </Card>
+        </PlayfulCard>
 
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-3">手工录入：公司行为</h3>
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="🎁" className="mb-3" title="手工录入：公司行为" />
           <form className="space-y-2" onSubmit={handleCorporateSubmit}>
             <input className={PORTFOLIO_INPUT_CLASS} placeholder="股票代码" value={corpForm.symbol}
               onChange={(e) => setCorpForm((prev) => ({ ...prev, symbol: e.target.value }))} required />
@@ -1448,12 +1498,12 @@ const PortfolioPage: React.FC = () => {
             )}
             <button type="submit" className="btn-secondary w-full" disabled={!writableAccountId}>提交企业行为</button>
           </form>
-        </Card>
+        </PlayfulCard>
       </section>
 
-      <section className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-3">券商 CSV 导入</h3>
+      <section className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="📥" className="mb-3" title="券商 CSV 导入" />
           <div className="space-y-2">
             {brokerLoadWarning ? (
               <InlineAlert
@@ -1506,10 +1556,10 @@ const PortfolioPage: React.FC = () => {
               />
             ) : null}
           </div>
-        </Card>
+        </PlayfulCard>
 
-        <Card padding="md">
-          <h3 className="text-sm font-semibold text-foreground mb-3">事件记录</h3>
+        <PlayfulCard padding="md">
+          <PlayfulSectionTitle emoji="🗂️" className="mb-3" title="事件记录" />
           <div className="space-y-2">
             <div className="grid grid-cols-2 gap-2">
               <select className={PORTFOLIO_SELECT_CLASS} value={eventType} onChange={(e) => setEventType(e.target.value as EventType)}>
@@ -1620,7 +1670,7 @@ const PortfolioPage: React.FC = () => {
                 && ((eventType === 'trade' && tradeEvents.length === 0)
                   || (eventType === 'cash' && cashEvents.length === 0)
                   || (eventType === 'corporate' && corporateEvents.length === 0)) ? (
-                    <EmptyState
+                    <PlayfulEmptyState
                       title="暂无流水"
                       description="调整筛选条件或先录入一笔交易、资金流水或公司行为。"
                       className="border-none bg-transparent px-3 py-6 shadow-none"
@@ -1641,7 +1691,7 @@ const PortfolioPage: React.FC = () => {
               </div>
             </div>
           </div>
-        </Card>
+        </PlayfulCard>
       </section>
       <ConfirmDialog
         isOpen={Boolean(pendingDelete)}
@@ -1677,7 +1727,7 @@ const PortfolioPage: React.FC = () => {
           }
         }}
       />
-    </div>
+    </PlayfulPage>
   );
 };
 

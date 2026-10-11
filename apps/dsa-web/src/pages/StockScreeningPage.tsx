@@ -10,13 +10,11 @@ import {
   Clock3,
   Droplet,
   Factory,
-  Flame,
   Gem,
   Landmark,
   Pickaxe,
   Plane,
   Play,
-  PlusCircle,
   RefreshCw,
   Search,
   Shield,
@@ -40,7 +38,27 @@ import {
   type ScreeningTrackingResponse,
 } from '../api/screening';
 import { formatParsedApiError, getParsedApiError, toApiErrorMessage, type ParsedApiError } from '../api/error';
-import { AppPage, Button, InlineAlert, Select } from '../components/common';
+import { Badge, Button, InlineAlert, Select } from '../components/common';
+// 与首页共用同一套「卡通友好」基元：页面只组合这些组件，不再自己拼一长串
+// Tailwind 类名，保证同一个视觉语言只在 components/playful 一处演进。
+//
+// 注意：状态类胶囊不用 PlayfulChip —— index.css 的 .playful-pill 会覆盖
+// Tailwind 的颜色工具类（未分层样式优先于 @layer utilities），tone 实际不生效，
+// 会把"可复盘/待行情"这类语义色压成中性灰。语义状态一律走既有 Badge 的
+// success/warning/danger 变体。
+import {
+  PlayfulCard,
+  PlayfulEmptyState,
+  PlayfulList,
+  PlayfulListItem,
+  PlayfulMascot,
+  PlayfulPage,
+  PlayfulSectionTitle,
+  PlayfulStat,
+  PlayfulStatGrid,
+  PlayfulTrack,
+  type PlayfulStatTone,
+} from '../components/playful';
 import { useUiLanguage } from '../contexts/UiLanguageContext';
 import {
   benchmarkIndexLabelKey,
@@ -209,17 +227,39 @@ const formatTrackingPercent = (value: number | null | undefined, digits = 2) => 
   return `${number > 0 ? '+' : ''}${number.toFixed(digits)}%`;
 };
 
+/**
+ * 复盘收益的涨跌配色，遵循 A 股习惯：红涨绿跌。
+ *
+ * 为什么不用 text-success / text-danger：那一套是「成功 / 失败」语义
+ * （--color-success 是绿色），用在收益率上会把上涨画成绿色，正好和 A 股习惯相反。
+ * playful 的 --playful-up / --playful-down 就是为此定义的（见 index.css），
+ * 与首页 PlayfulStat 的 tone="up" / tone="down" 是同一组颜色。
+ */
 const getTrackingReturnClassName = (value: number | null | undefined) => {
   if (value == null || Number.isNaN(Number(value))) {
     return 'text-secondary-text';
   }
   if (Number(value) > 0) {
-    return 'text-success';
+    return 'text-[var(--playful-up)]';
   }
   if (Number(value) < 0) {
-    return 'text-danger';
+    return 'text-[var(--playful-down)]';
   }
   return 'text-secondary-text';
+};
+
+/** PlayfulStat 的 tone 版本：null 与持平都走中性色，不冒充涨也不冒充跌。 */
+const getTrackingReturnTone = (value: number | null | undefined): PlayfulStatTone => {
+  if (value == null || Number.isNaN(Number(value))) {
+    return 'soft';
+  }
+  if (Number(value) > 0) {
+    return 'up';
+  }
+  if (Number(value) < 0) {
+    return 'down';
+  }
+  return 'soft';
 };
 
 const FACTOR_LABELS: Record<string, string> = {
@@ -931,7 +971,11 @@ const StockScreeningPage: React.FC = () => {
       : ['智能重排未完成，当前候选继续使用确定性因子评分。']
     : screenMessages;
   const isScreeningEnabled = enabled && available;
-  const statusText = isScreeningEnabled ? '选股已开启' : '选股未开启';
+  // 状态文案也要过 t()：它同时出现在页头状态胶囊和"未开启"提示里，
+  // 两处必须同源，否则双语切换时会一处中文一处英文。
+  const statusText = isScreeningEnabled
+    ? t('screeningPage.status.enabled')
+    : t('screeningPage.status.disabled');
 
   // 复盘区块的展示文案（原因码 → 本地化）。后端只返回机器可读的原因码，
   // 映射集中在 screeningTrackingDisplay，便于用测试钉住契约。
@@ -1517,29 +1561,38 @@ const StockScreeningPage: React.FC = () => {
   };
 
   return (
-    <AppPage className="max-w-6xl space-y-6 pb-12 pt-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex items-center gap-3">
-          <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-cyan text-cyan shadow-[0_0_24px_hsl(var(--primary)/0.18)]">
-            <PlusCircle className="h-4 w-4" />
-          </span>
-          <h1 className="text-2xl font-bold tracking-normal text-foreground">选股</h1>
+    <PlayfulPage className="max-w-6xl space-y-6 pb-12 pt-6">
+      {/* ---------- 页头：暖色问候条，与首页同一套 hero 卡 ---------- */}
+      <PlayfulCard variant="hero" padding="none" className="flex flex-wrap items-center gap-4 px-5 py-4">
+        <PlayfulMascot className="h-[72px] w-[104px] shrink-0" />
+        <div className="min-w-[12rem] flex-1">
+          <h1 className="text-2xl font-extrabold tracking-tight text-foreground">
+            {t('screeningPage.page.title')}
+          </h1>
+          <p className="mt-1 text-xs font-semibold playful-ink-soft">{t('screeningPage.page.subtitle')}</p>
         </div>
-
-        <div className="inline-flex w-fit items-center gap-2 rounded-2xl border border-border/70 bg-card/80 px-4 py-2 text-sm shadow-soft-card">
-          <span className={`h-2.5 w-2.5 rounded-full ${isScreeningEnabled ? 'bg-success' : 'bg-warning'}`} />
-          <span className="font-medium text-secondary-text">{statusText}</span>
-        </div>
-      </div>
+        <Badge
+          variant={isScreeningEnabled ? 'success' : 'warning'}
+          size="md"
+          className="shrink-0"
+        >
+          {statusText}
+        </Badge>
+      </PlayfulCard>
 
       {!enabled ? (
         <InlineAlert
           variant="info"
-          title="选股未开启"
-          message="开启后即可运行选股策略。"
+          title={t('screeningPage.disabled.title')}
+          message={t('screeningPage.disabled.message')}
           action={
-            <Button size="sm" isLoading={enabling} loadingText="开启中..." onClick={() => void handleEnable()}>
-              开启选股
+            <Button
+              size="sm"
+              isLoading={enabling}
+              loadingText={t('screeningPage.enable.actionLoading')}
+              onClick={() => void handleEnable()}
+            >
+              {t('screeningPage.enable.action')}
             </Button>
           }
         />
@@ -1548,21 +1601,17 @@ const StockScreeningPage: React.FC = () => {
       {enabled && !available ? (
         <InlineAlert
           variant="warning"
-          title="选股功能不可用"
-          message="请检查后端日志、策略文件和基础数据依赖后重启服务。"
+          title={t('screeningPage.unavailable.title')}
+          message={t('screeningPage.unavailable.message')}
         />
       ) : null}
 
-      {error ? <InlineAlert variant="danger" title="调用失败" message={error} /> : null}
+      {error ? <InlineAlert variant="danger" title={t('screeningPage.error.title')} message={error} /> : null}
 
-      <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
+      <PlayfulCard as="section" padding="md">
         <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex items-start gap-3">
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-orange-500/10 text-orange-500 shadow-[0_10px_30px_rgba(249,115,22,0.16)]">
-              <Flame className="h-5 w-5" />
-            </span>
-            <h2 className="text-lg font-bold tracking-normal text-foreground">热点题材</h2>
-          </div>
+          {/* 热点是"温度"语义，用暖色火苗做区块标记，不占用语义色 */}
+          <PlayfulSectionTitle emoji="🔥" as="h2" title={t('screeningPage.hotspot.title')} />
           <div className="flex flex-col items-start gap-2 lg:items-end">
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -1801,24 +1850,22 @@ const StockScreeningPage: React.FC = () => {
             ) : null}
           </div>
         ) : null}
-      </section>
+      </PlayfulCard>
 
-      <section className="rounded-2xl border border-cyan/35 bg-card/95 p-4 shadow-soft-card">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <SlidersHorizontal className="h-4 w-4 text-cyan" />
-            运行选股
-          </div>
-          <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 text-xs font-semibold text-cyan">
-            {selectedStrategyTag}
-          </span>
+      <PlayfulCard as="section" padding="md">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <PlayfulSectionTitle
+            icon={<SlidersHorizontal className="h-4 w-4" />}
+            title={t('screeningPage.form.title')}
+          />
+          <Badge variant="info">{selectedStrategyTag}</Badge>
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr_180px_auto] lg:items-end">
           <label className="space-y-2 text-xs font-medium text-secondary-text">
-            市场
+            {t('screeningPage.form.market')}
             <select
-              className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
+              className="h-11 w-full rounded-xl border border-[var(--playful-border)] bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
               value={market}
               disabled={loading}
               onChange={(event) => handleMarketChange(event.target.value)}
@@ -1832,7 +1879,7 @@ const StockScreeningPage: React.FC = () => {
           </label>
 
           <div className="space-y-2 text-xs font-medium text-secondary-text">
-            <label htmlFor="screening-strategy">策略</label>
+            <label htmlFor="screening-strategy">{t('screeningPage.form.strategy')}</label>
             <Select
               id="screening-strategy"
               value={selectedStrategy ? strategy : CUSTOM_STRATEGY_OPTION_VALUE}
@@ -1843,7 +1890,7 @@ const StockScreeningPage: React.FC = () => {
                   value: item.id,
                   label: item.name || item.title || item.id,
                 })),
-                { value: CUSTOM_STRATEGY_OPTION_VALUE, label: '自定义策略…' },
+                { value: CUSTOM_STRATEGY_OPTION_VALUE, label: t('screeningPage.form.strategyCustomOption') },
               ]}
               onChange={(value) =>
                 handleStrategyChange(
@@ -1855,22 +1902,22 @@ const StockScreeningPage: React.FC = () => {
 
           {!selectedStrategy && !loadingStrategies ? (
             <label className="space-y-2 text-xs font-medium text-secondary-text lg:col-start-2">
-              自定义策略 ID
+              {t('screeningPage.form.strategyCustomId')}
               <input
-                aria-label="自定义策略 ID"
-                className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
+                aria-label={t('screeningPage.form.strategyCustomId')}
+                className="h-11 w-full rounded-xl border border-[var(--playful-border)] bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
                 value={strategy}
                 disabled={loading}
-                placeholder="输入策略 ID"
+                placeholder={t('screeningPage.form.strategyCustomIdPlaceholder')}
                 onChange={(event) => handleStrategyChange(event.target.value)}
               />
             </label>
           ) : null}
 
           <label className="space-y-2 text-xs font-medium text-secondary-text">
-            返回数量
+            {t('screeningPage.form.maxResults')}
             <input
-              className="h-11 w-full rounded-xl border border-border bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
+              className="h-11 w-full rounded-xl border border-[var(--playful-border)] bg-surface px-3 text-sm text-foreground outline-none transition-colors focus:border-cyan"
               type="number"
               min={1}
               max={100}
@@ -1883,67 +1930,98 @@ const StockScreeningPage: React.FC = () => {
           <Button
             className="h-11 min-w-40"
             isLoading={loading}
-            loadingText="筛选中..."
+            loadingText={t('screeningPage.form.submitting')}
             disabled={!isScreeningEnabled || loading || !strategy.trim()}
             onClick={() => void handleSubmit()}
           >
             <Play className="h-4 w-4" />
-            运行选股
+            {t('screeningPage.form.submit')}
           </Button>
         </div>
 
-        <div className="mt-3 rounded-xl border border-border/75 bg-surface/55 px-3 py-2 text-xs leading-5 text-secondary-text">
+        {/* 策略说明条沿用 playful 的暖黄便签：它是补充说明，不该抢表单的注意力 */}
+        <div className="playful-note mt-3 rounded-xl px-3 py-2 text-xs leading-5">
           {strategyLoadError
             ? strategyLoadError
-            : selectedStrategy?.description || '策略会先执行硬过滤和因子评分，再进行风险与组合约束。'}
+            : selectedStrategy?.description || t('screeningPage.form.descriptionFallback')}
         </div>
-      </section>
+      </PlayfulCard>
 
       {loading || screenMeta ? (
-        <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
+        <PlayfulCard as="section" padding="md">
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-3">
-              <span className={`grid h-7 w-7 place-items-center rounded-full ${loading ? 'text-cyan' : 'text-success'}`}>
-                {loading ? <CircleAlert className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
-              </span>
-              <div>
-                <h2 className="text-sm font-semibold text-foreground">{loading ? '选股运行中' : '选股完成'}</h2>
-                <p className="mt-1 text-xs text-secondary-text">
-                  {loading
-                    ? `${taskMessage || '正在执行选股'} · ${taskProgress}%`
-                    : `${displayedStrategy} · ${MARKETS.find((item) => item.id === market)?.label}`}
-                </p>
-              </div>
+            <span className={`grid h-9 w-9 shrink-0 place-items-center rounded-full ${loading ? 'bg-[var(--playful-tint-b)] text-[var(--playful-grape)]' : 'bg-success/10 text-success'}`}>
+              {loading ? <CircleAlert className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+            </span>
+            <div>
+              <h2 className="text-sm font-bold text-foreground">
+                {loading ? t('screeningPage.progress.running') : t('screeningPage.progress.done')}
+              </h2>
+              <p className="mt-1 text-xs playful-ink-soft">
+                {loading
+                  ? `${taskMessage || t('screeningPage.progress.message')} · ${taskProgress}%`
+                  : `${displayedStrategy} · ${MARKETS.find((item) => item.id === market)?.label}`}
+              </p>
             </div>
           </div>
 
-          <details className="mt-3 border-t border-border/70 pt-3 text-xs text-secondary-text">
-            <summary className="w-fit cursor-pointer font-medium text-secondary-text">运行详情</summary>
+          {/* 运行时画真实进度（后端 progress 字段），不做假动画 */}
+          {loading ? (
+            <PlayfulTrack
+              as="div"
+              size="sm"
+              tone="grape"
+              className="mt-3 w-full"
+              value={taskProgress}
+            />
+          ) : null}
+
+          <details className="mt-3 border-t border-dashed playful-dashed pt-3 text-xs text-secondary-text">
+            <summary className="w-fit cursor-pointer font-medium text-secondary-text">
+              {t('screeningPage.result.details')}
+            </summary>
             <div className="mt-2 grid gap-1">
-              <span>任务：{activeTaskId ? activeTaskId.slice(0, 12) : '-'}</span>
-              <span>Run ID：{screenMeta?.runId || '-'}</span>
+              <span>{t('screeningPage.result.task', { id: activeTaskId ? activeTaskId.slice(0, 12) : '-' })}</span>
+              <span>{t('screeningPage.result.runId', { id: screenMeta?.runId || '-' })}</span>
               <span>
-                快照 {screenMeta?.snapshotCount ?? '-'} · 过滤后 {screenMeta?.afterFilterCount ?? '-'} · 候选 {screenMeta?.candidateCount ?? candidates.length}
+                {t('screeningPage.result.counts', {
+                  snapshot: screenMeta?.snapshotCount ?? '-',
+                  afterFilter: screenMeta?.afterFilterCount ?? '-',
+                  candidates: screenMeta?.candidateCount ?? candidates.length,
+                })}
               </span>
               <span>
-                排序：{screenMeta?.llmRanked ? '智能重排' : screenMeta ? '确定性因子' : '-'}
+                {t('screeningPage.result.ranking', {
+                  mode: screenMeta?.llmRanked
+                    ? t('screeningPage.result.rankingLlm')
+                    : screenMeta
+                      ? t('screeningPage.result.rankingFactor')
+                      : '-',
+                })}
                 {screenMeta?.llmModelUsed ? ` · ${screenMeta.llmModelUsed}` : ''}
-                {screenMeta?.llmCoverage != null ? ` · 覆盖 ${formatPercent(screenMeta.llmCoverage)}` : ''}
+                {screenMeta?.llmCoverage != null
+                  ? ` · ${t('screeningPage.result.coverage', { coverage: formatPercent(screenMeta.llmCoverage) })}`
+                  : ''}
               </span>
               {screenMeta?.resultVariantPoolSize ? (
                 <span>
-                  候选差异：近分池 {screenMeta.resultVariantPoolSize} ·{' '}
                   {screenMeta.resultVariantApplied
-                    ? `本次替换 ${screenMeta.resultVariantRotatedSlots ?? 0} 位`
-                    : '本次保持基准'}
+                    ? t('screeningPage.result.variantApplied', {
+                        pool: screenMeta.resultVariantPoolSize,
+                        rotated: screenMeta.resultVariantRotatedSlots ?? 0,
+                      })
+                    : t('screeningPage.result.variantKept', { pool: screenMeta.resultVariantPoolSize })}
                 </span>
               ) : null}
               <span>
-                深度补充：{screenMeta?.dsaEnrichment?.enrichedCount ?? '-'} / {screenMeta?.dsaEnrichment?.requestedCount ?? '-'}
+                {t('screeningPage.result.enrichment', {
+                  enriched: screenMeta?.dsaEnrichment?.enrichedCount ?? '-',
+                  requested: screenMeta?.dsaEnrichment?.requestedCount ?? '-',
+                })}
               </span>
             </div>
           </details>
-        </section>
+        </PlayfulCard>
       ) : null}
 
       {screenMeta && alertMessages.length > 0 ? (
@@ -1955,21 +2033,22 @@ const StockScreeningPage: React.FC = () => {
       ) : null}
 
       {screenMeta ? (
-        <section className="rounded-2xl border border-border bg-card/95 p-4 shadow-soft-card">
-          <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-            <h2 className="text-base font-semibold text-foreground">选股结果</h2>
-          <div className="flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-2 text-xs text-secondary-text">
-            <Search className="h-4 w-4 text-cyan" />
-            {candidates.length} 条候选
-          </div>
+        <PlayfulCard as="section" padding="md">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <PlayfulSectionTitle emoji="📋" as="h2" title={t('screeningPage.result.title')} />
+            <Badge variant="default">
+              <Search className="h-3.5 w-3.5" aria-hidden="true" />
+              <span className="tabular-nums">{t('screeningPage.result.count', { count: candidates.length })}</span>
+            </Badge>
           </div>
 
         {candidates.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border bg-surface/70 px-5 py-10 text-center">
-            <p className="text-sm font-medium text-foreground">暂无符合条件的候选</p>
-          </div>
+          <PlayfulEmptyState
+            icon={<Search className="h-6 w-6" />}
+            title={t('screeningPage.result.empty')}
+          />
         ) : (
-          <div className="overflow-hidden rounded-xl border border-border">
+          <div className="overflow-hidden rounded-2xl border border-[var(--playful-border)]">
             <table className="w-full min-w-[860px] border-collapse text-sm">
               <thead className="bg-surface text-left text-xs text-secondary-text">
                 <tr>
@@ -2143,25 +2222,26 @@ const StockScreeningPage: React.FC = () => {
             </table>
           </div>
         )}
-        </section>
+        </PlayfulCard>
       ) : null}
 
-      <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Activity className="h-4 w-4 text-cyan" />
-            {t('screening.tracking.title')}
-          </div>
-          <button
-            type="button"
-            className="text-xs font-medium text-cyan transition-colors hover:text-foreground"
-            onClick={() => void loadTracking()}
-            disabled={trackingLoading}
-          >
-            {trackingLoading ? t('common.loading') : t('screening.tracking.refresh')}
-          </button>
-        </div>
-        <p className="mb-3 text-xs text-secondary-text">
+      <PlayfulCard as="section" padding="md">
+        <PlayfulSectionTitle
+          emoji="📈"
+          as="h2"
+          title={t('screening.tracking.title')}
+          meta={
+            <button
+              type="button"
+              className="font-semibold text-[var(--playful-grape)] transition-colors hover:text-foreground disabled:opacity-60"
+              onClick={() => void loadTracking()}
+              disabled={trackingLoading}
+            >
+              {trackingLoading ? t('common.loading') : t('screening.tracking.refresh')}
+            </button>
+          }
+        />
+        <p className="mt-1 text-xs leading-5 playful-ink-soft">
           {t('screening.tracking.subtitle', { days: tracking?.windowDays ?? TRACKING_WINDOW_DAYS })}
           {tracking ? ` · ${trackingFreshnessText}` : ''}
           {tracking && tracking.runWindow.malformedRuns > 0
@@ -2169,61 +2249,88 @@ const StockScreeningPage: React.FC = () => {
             : ''}
         </p>
         {trackingError ? (
-          <p className="mb-3 text-xs text-danger">
+          <p className="mt-2 text-xs text-danger">
             {t('screening.tracking.loadError')}
             {trackingError ? `: ${trackingError}` : ''}
           </p>
         ) : null}
         {!tracking && trackingLoading ? (
-          <p className="py-3 text-center text-xs text-secondary-text">{t('screening.tracking.loading')}</p>
+          <p className="py-3 text-center text-xs playful-ink-soft">{t('screening.tracking.loading')}</p>
         ) : null}
         {!tracking && !trackingLoading && !trackingError ? (
-          <p className="py-3 text-center text-xs text-secondary-text">{t('screening.tracking.empty')}</p>
+          <p className="py-3 text-center text-xs playful-ink-soft">{t('screening.tracking.empty')}</p>
         ) : null}
         {tracking ? (
           <>
-            <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
-              {[
-                { label: t('screening.tracking.metric.picks'), value: String(tracking.total.picks) },
-                { label: t('screening.tracking.metric.trackable'), value: String(tracking.total.trackable) },
-                { label: t('screening.tracking.metric.untrackable'), value: String(tracking.total.untrackable) },
-                {
-                  label: t('screening.tracking.metric.hitRate'),
-                  value: tracking.total.hitRate == null
-                    ? t('screening.tracking.noTrackableValue')
-                    : formatTrackingPercent(tracking.total.hitRate * 100, 0),
-                },
-                {
-                  label: t('screening.tracking.metric.avgReturn'),
-                  value: tracking.total.avgReturnPct == null
-                    ? t('screening.tracking.noTrackableValue')
-                    : formatTrackingPercent(tracking.total.avgReturnPct),
-                },
-                {
-                  // 相对基准的超额：这才是"选股有没有用"的答案。分母为 0 时显式说明，
-                  // 不显示成 +0.00%（那会被读成"与大盘持平"）。
-                  label: t('screening.tracking.metric.avgExcess'),
-                  value: tracking.total.avgExcessReturnPct == null
-                    ? t('screening.tracking.noTrackableValue')
-                    : formatSignedPercent(tracking.total.avgExcessReturnPct),
-                },
-                {
-                  label: t('screening.tracking.metric.beatRate'),
-                  value: tracking.total.beatBenchmarkRate == null
-                    ? t('screening.tracking.noTrackableValue')
-                    : formatRatePercent(tracking.total.beatBenchmarkRate, 0),
-                },
-              ].map((item) => (
-                <div key={item.label} className="rounded-xl border border-border/60 bg-elevated/40 px-3 py-2">
-                  <div className="text-[11px] text-secondary-text">{item.label}</div>
-                  <div className="mt-0.5 text-sm font-semibold text-foreground">{item.value}</div>
-                </div>
-              ))}
-            </div>
+            {/* 七个指标固定一行（窄屏 2 列 / 中屏 4 列 / 宽屏 7 列）：
+                用 wrap 会把"跑赢基准"挤到第二行，看起来像漏了一项 */}
+            <PlayfulStatGrid className="mt-3 gap-2 md:grid-cols-4 xl:grid-cols-7">
+              <PlayfulStat
+                size="sm"
+                tone="ink"
+                label={t('screening.tracking.metric.picks')}
+                value={tracking.total.picks}
+              />
+              <PlayfulStat
+                size="sm"
+                tone="mint"
+                label={t('screening.tracking.metric.trackable')}
+                value={tracking.total.trackable}
+              />
+              <PlayfulStat
+                size="sm"
+                tone="sun"
+                label={t('screening.tracking.metric.untrackable')}
+                value={tracking.total.untrackable}
+              />
+              <PlayfulStat
+                size="sm"
+                tone={tracking.total.hitRate == null ? 'soft' : 'grape'}
+                label={t('screening.tracking.metric.hitRate')}
+                value={tracking.total.hitRate == null
+                  ? t('screening.tracking.noTrackableValue')
+                  : formatTrackingPercent(tracking.total.hitRate * 100, 0)}
+              />
+              <PlayfulStat
+                size="sm"
+                tone={getTrackingReturnTone(tracking.total.avgReturnPct)}
+                label={t('screening.tracking.metric.avgReturn')}
+                value={tracking.total.avgReturnPct == null
+                  ? t('screening.tracking.noTrackableValue')
+                  : formatTrackingPercent(tracking.total.avgReturnPct)}
+              />
+              {/* 相对基准的超额：这才是"选股有没有用"的答案。分母为 0 时显式说明，
+                  不显示成 +0.00%（那会被读成"与大盘持平"）。 */}
+              <PlayfulStat
+                size="sm"
+                tone={getTrackingReturnTone(tracking.total.avgExcessReturnPct)}
+                label={t('screening.tracking.metric.avgExcess')}
+                value={tracking.total.avgExcessReturnPct == null
+                  ? t('screening.tracking.noTrackableValue')
+                  : formatSignedPercent(tracking.total.avgExcessReturnPct)}
+              />
+              <PlayfulStat
+                size="sm"
+                tone={tracking.total.beatBenchmarkRate == null ? 'soft' : 'grape'}
+                label={t('screening.tracking.metric.beatRate')}
+                value={tracking.total.beatBenchmarkRate == null
+                  ? t('screening.tracking.noTrackableValue')
+                  : formatRatePercent(tracking.total.beatBenchmarkRate, 0)}
+              />
+            </PlayfulStatGrid>
+
+            {/* 命中率口径常驻可见：分母只含可复盘样本，缺前瞻 K 线的入选既不入分母、
+                也不会被当成 0% —— 这条说明不能藏进提示里，否则数字会被误读 */}
+            <p className="mt-2 text-[11px] font-semibold leading-5 playful-ink-soft">
+              {t('screeningPage.tracking.hitRateBasis', {
+                trackable: tracking.total.trackable,
+                picks: tracking.total.picks,
+              })}
+            </p>
 
             {tracking.total.untrackable > 0 ? (
               <InlineAlert
-                className="mb-3"
+                className="mt-3"
                 variant={tracking.total.trackable === 0 ? 'warning' : 'info'}
                 title={tracking.total.trackable === 0 ? t('screening.tracking.untrackableNotice.title') : undefined}
                 message={
@@ -2241,73 +2348,109 @@ const StockScreeningPage: React.FC = () => {
             ) : null}
 
             {tracking.untrackableReasons.length > 0 ? (
-              <p className="mb-3 text-xs text-secondary-text">
-                {tracking.untrackableReasons
-                  .map((item) => `${trackingReasonLabel(item.reason)} ${item.count}`)
-                  .join(' · ')}
-              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-semibold playful-ink-soft">
+                  {t('screeningPage.tracking.untrackableReasons')}
+                </span>
+                {tracking.untrackableReasons.map((item) => (
+                  <Badge key={item.reason} variant="warning">
+                    {trackingReasonLabel(item.reason)} <span className="tabular-nums">{item.count}</span>
+                  </Badge>
+                ))}
+              </div>
             ) : null}
 
             {tracking.strategies.length > 0 ? (
-              <div className="mb-4">
-                <p className="mb-2 text-xs font-semibold text-foreground">
-                  {t('screening.tracking.strategyTable.title')}
-                </p>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-left text-xs">
-                    <thead className="text-secondary-text">
-                      <tr>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.strategyTable.strategy')}</th>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.picks')}</th>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.trackable')}</th>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.hitRate')}</th>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.avgReturn')}</th>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.avgExcess')}</th>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.metric.beatRate')}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border/60">
-                      {tracking.strategies.map((row) => (
-                        <tr key={row.strategy}>
-                          <td className="py-2 pr-3 font-medium text-foreground">
-                            {formatHistoryStrategyName(row.strategy, strategies)}
-                          </td>
-                          <td className="py-2 pr-3 text-secondary-text">{row.picks}</td>
-                          <td className="py-2 pr-3 text-secondary-text">{row.trackable}</td>
-                          <td className="py-2 pr-3 text-secondary-text">
-                            {row.hitRate == null
-                              ? t('screening.tracking.noTrackableValue')
-                              : formatTrackingPercent(row.hitRate * 100, 0)}
-                          </td>
-                          <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(row.avgReturnPct)}`}>
-                            {row.avgReturnPct == null ? '-' : formatTrackingPercent(row.avgReturnPct)}
-                          </td>
-                          <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(row.avgExcessReturnPct)}`}>
-                            {row.avgExcessReturnPct == null ? '-' : formatSignedPercent(row.avgExcessReturnPct)}
-                          </td>
-                          <td className="py-2 pr-3 text-secondary-text">
-                            {row.beatBenchmarkRate == null
-                              ? '-'
-                              : `${formatRatePercent(row.beatBenchmarkRate, 0)} (${row.beatBenchmarkDenominator})`}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              <div className="mt-4">
+                <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                  <p className="text-xs font-bold text-foreground">
+                    {t('screening.tracking.strategyTable.title')}
+                  </p>
+                  <p className="text-[11px] font-semibold playful-ink-soft">
+                    {t('screeningPage.tracking.strategyHint')}
+                  </p>
                 </div>
+                <PlayfulList>
+                  {tracking.strategies.map((row) => {
+                    const hitRate = row.hitRate;
+                    return (
+                      <PlayfulListItem
+                        key={row.strategy}
+                        density="roomy"
+                        className="flex-col items-stretch gap-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="min-w-0 flex-1 truncate text-xs font-bold text-foreground">
+                            {formatHistoryStrategyName(row.strategy, strategies)}
+                          </span>
+                          <span className="inline-flex items-baseline gap-1 text-[11px] font-semibold playful-ink-soft">
+                            {t('screening.tracking.metric.picks')}
+                            <b className="text-xs font-extrabold tabular-nums text-foreground">{row.picks}</b>
+                          </span>
+                          <span className="inline-flex items-baseline gap-1 text-[11px] font-semibold playful-ink-soft">
+                            {t('screening.tracking.metric.trackable')}
+                            <b className="text-xs font-extrabold tabular-nums text-foreground">{row.trackable}</b>
+                          </span>
+                          {/* 没有可复盘样本时命中率必须显示"样本不足"，绝不能拿 0 顶替 */}
+                          <span className="inline-flex items-baseline gap-1 text-[11px] font-semibold playful-ink-soft">
+                            {t('screening.tracking.metric.hitRate')}
+                            <b className={`text-xs font-extrabold tabular-nums ${hitRate == null ? 'text-secondary-text' : 'text-[var(--playful-grape)]'}`}>
+                              {hitRate == null
+                                ? t('screening.tracking.noTrackableValue')
+                                : formatTrackingPercent(hitRate * 100, 0)}
+                            </b>
+                          </span>
+                          <span className="inline-flex items-baseline gap-1 text-[11px] font-semibold playful-ink-soft">
+                            {t('screening.tracking.metric.avgReturn')}
+                            <b className={`text-xs font-extrabold tabular-nums ${getTrackingReturnClassName(row.avgReturnPct)}`}>
+                              {row.avgReturnPct == null ? '-' : formatTrackingPercent(row.avgReturnPct)}
+                            </b>
+                          </span>
+                          <span className="inline-flex items-baseline gap-1 text-[11px] font-semibold playful-ink-soft">
+                            {t('screening.tracking.metric.avgExcess')}
+                            <b className={`text-xs font-extrabold tabular-nums ${getTrackingReturnClassName(row.avgExcessReturnPct)}`}>
+                              {row.avgExcessReturnPct == null ? '-' : formatSignedPercent(row.avgExcessReturnPct)}
+                            </b>
+                          </span>
+                          {/* 跑赢基准恒带分母：口径可见，不能只给一个比率 */}
+                          <span className="inline-flex items-baseline gap-1 text-[11px] font-semibold playful-ink-soft">
+                            {t('screening.tracking.metric.beatRate')}
+                            <b className="text-xs font-extrabold tabular-nums text-foreground">
+                              {row.beatBenchmarkRate == null
+                                ? '-'
+                                : `${formatRatePercent(row.beatBenchmarkRate, 0)} (${row.beatBenchmarkDenominator})`}
+                            </b>
+                          </span>
+                        </div>
+                        {/* 条长 = 命中率（0~100%），只在真有可复盘样本时才画：
+                            空条形会被读成"0% 命中"，所以样本不足时干脆不画。
+                            颜色固定用 grape 点缀色 —— 命中率不是涨跌，不借用红绿语义。 */}
+                        {hitRate == null ? null : (
+                          <PlayfulTrack
+                            as="div"
+                            size="sm"
+                            tone="grape"
+                            className="w-full"
+                            value={Math.max(0, Math.min(100, hitRate * 100))}
+                          />
+                        )}
+                      </PlayfulListItem>
+                    );
+                  })}
+                </PlayfulList>
               </div>
             ) : null}
 
             {tracking.picks.length > 0 ? (
-              <div>
-                <p className="mb-2 text-xs font-semibold text-foreground">
+              <div className="mt-4">
+                <p className="mb-2 text-xs font-bold text-foreground">
                   {t('screening.tracking.picksTable.title')}
                 </p>
-                <div className="max-h-80 overflow-y-auto">
+                <div className="max-h-80 overflow-y-auto rounded-2xl border border-[var(--playful-border)]">
                   <table className="w-full min-w-[840px] text-left text-xs">
                     <thead className="sticky top-0 bg-card/95 text-secondary-text">
                       <tr>
-                        <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.name')}</th>
+                        <th className="py-2 pl-3 pr-3 font-medium">{t('screening.tracking.column.name')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.pickDate')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.pickPrice')}</th>
                         <th className="py-2 pr-3 font-medium">{t('screening.tracking.column.latestClose')}</th>
@@ -2320,8 +2463,8 @@ const StockScreeningPage: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-border/60">
                       {tracking.picks.map((pick) => (
-                        <tr key={`${pick.runId}-${pick.code}`}>
-                          <td className="py-2 pr-3">
+                        <tr key={`${pick.runId}-${pick.code}`} className="transition-colors hover:bg-hover/40">
+                          <td className="py-2 pl-3 pr-3">
                             <span className="font-medium text-foreground">{pick.name || pick.code}</span>
                             <span className="ml-1 text-secondary-text">{pick.code}</span>
                           </td>
@@ -2332,9 +2475,11 @@ const StockScreeningPage: React.FC = () => {
                           <td className="py-2 pr-3 text-secondary-text">
                             {pick.latestClose == null ? '-' : pick.latestClose.toFixed(2)}
                           </td>
+                          {/* 不可复盘的入选一律给 '-'，绝不用 0% 冒充"持平" */}
                           <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(pick.returnPct)}`}>
                             {pick.trackable ? formatTrackingPercent(pick.returnPct) : '-'}
                           </td>
+                          {/* 有基准就显示超额；没有基准但可复盘就显示原因码，两者都没有才是 '-' */}
                           <td className={`py-2 pr-3 font-medium ${getTrackingReturnClassName(pick.excessReturnPct)}`}>
                             {pick.benchmarkAvailable
                               ? formatSignedPercent(pick.excessReturnPct)
@@ -2350,11 +2495,13 @@ const StockScreeningPage: React.FC = () => {
                           </td>
                           <td className="py-2 pr-3">
                             {pick.trackable ? (
-                              <span className="text-success">{t('screening.tracking.status.trackable')}</span>
+                              <Badge variant="success">{t('screening.tracking.status.trackable')}</Badge>
                             ) : (
-                              <span className="text-warning">
+                              // 不可复盘必须带上机器原因码对应的人话，而不是只画一个灰点；
+                              // 语义色沿用既有 warning 令牌，不用中性 pill 掩盖状态
+                              <Badge variant="warning">
                                 {t('screening.tracking.status.untrackable')} · {trackingReasonLabel(pick.reason)}
-                              </span>
+                              </Badge>
                             )}
                           </td>
                         </tr>
@@ -2366,7 +2513,8 @@ const StockScreeningPage: React.FC = () => {
             ) : null}
 
             {trackingBenchmarkUnavailableReason ? (
-              <p className="mt-3 text-xs text-secondary-text">
+              // 基准不可用时必须说清"为什么没有"，不能安静地不显示
+              <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-xs leading-5 text-warning">
                 {t('screening.tracking.benchmark.unavailable', {
                   reason: trackingBenchmarkLabel(trackingBenchmarkUnavailableReason),
                 })}
@@ -2376,7 +2524,7 @@ const StockScreeningPage: React.FC = () => {
             {!trackingBenchmarkUnavailableReason &&
             tracking.benchmark.comparablePicks === 0 ? (
               // 指数有了但一只能比的都没有：这是"有基准、无样本"，不是"跑平基准"。
-              <p className="mt-3 text-xs text-secondary-text">
+              <p className="mt-3 rounded-xl border border-[var(--playful-border)] bg-elevated/40 px-3 py-2 text-xs leading-5 text-secondary-text">
                 {t('screening.tracking.benchmark.noComparable', {
                   index: trackingBenchmarkIndexName(tracking.benchmark.code),
                 })}
@@ -2385,8 +2533,10 @@ const StockScreeningPage: React.FC = () => {
 
             {!trackingBenchmarkUnavailableReason &&
             tracking.benchmark.comparablePicks > 0 ? (
-              <div className="mt-3 rounded-xl border border-border/60 bg-elevated/40 px-3 py-2">
-                <p className="text-xs text-foreground">
+              // 基准条用 playful 的暖黄便签：它是"这批选股到底跑赢没有"的结论行，
+              // 但要和涨跌红绿区分开，所以不借用 up/down 色。
+              <div className="playful-note mt-3 rounded-2xl px-3 py-2">
+                <p className="text-xs font-bold">
                   {t('screening.tracking.benchmark.summary', {
                     index: trackingBenchmarkIndexName(tracking.benchmark.code),
                     benchmarkReturn: formatSignedPercent(tracking.benchmark.avgBenchmarkReturnPct),
@@ -2394,16 +2544,16 @@ const StockScreeningPage: React.FC = () => {
                     beatRate: formatRatePercent(tracking.benchmark.beatBenchmarkRate, 0),
                   })}
                 </p>
-                <p className="mt-1 text-[11px] text-secondary-text">
+                <p className="mt-1 text-[11px] leading-5">
                   {t('screening.tracking.benchmark.summaryBasis', {
                     denominator: tracking.benchmark.beatBenchmarkDenominator,
                   })}
                 </p>
-                <p className="mt-0.5 text-[11px] text-secondary-text">
+                <p className="mt-0.5 text-[11px] leading-5">
                   {t('screening.tracking.benchmark.windowBasis')}
                 </p>
                 {tracking.benchmark.unavailableReasons.length > 0 ? (
-                  <p className="mt-0.5 text-[11px] text-secondary-text">
+                  <p className="mt-0.5 text-[11px] leading-5">
                     {tracking.benchmark.unavailableReasons
                       .map((item) => `${trackingBenchmarkLabel(item.reason)} ${item.count}`)
                       .join(' · ')}
@@ -2413,61 +2563,69 @@ const StockScreeningPage: React.FC = () => {
             ) : null}
           </>
         ) : null}
-      </section>
+      </PlayfulCard>
 
-      <section className="rounded-2xl border border-border/80 bg-card/95 p-4 shadow-soft-card">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Clock3 className="h-4 w-4 text-cyan" />
-            历史记录
-          </div>
-          <button
-            type="button"
-            className="text-xs font-medium text-cyan transition-colors hover:text-foreground"
-            onClick={() => void loadHistory()}
-            disabled={historyLoading}
-          >
-            {historyLoading ? '加载中...' : '刷新'}
-          </button>
-        </div>
+      <PlayfulCard as="section" padding="md">
+        <PlayfulSectionTitle
+          emoji="🕒"
+          as="h2"
+          title={t('screeningPage.history.title')}
+          meta={
+            <button
+              type="button"
+              className="font-semibold text-[var(--playful-grape)] transition-colors hover:text-foreground disabled:opacity-60"
+              onClick={() => void loadHistory()}
+              disabled={historyLoading}
+            >
+              {historyLoading ? t('screeningPage.history.loadingAction') : t('screeningPage.history.refresh')}
+            </button>
+          }
+        />
         {historyError ? (
-          <p className="mb-3 text-xs text-danger">{historyError}</p>
+          <p className="mt-2 text-xs text-danger">{historyError}</p>
         ) : null}
         {historyRuns.length === 0 ? (
-          <p className="py-3 text-center text-xs text-secondary-text">
-            {historyLoading ? '正在加载历史记录...' : '暂无历史选股记录'}
-          </p>
+          <PlayfulEmptyState
+            className="mt-3"
+            icon={<Clock3 className="h-6 w-6" />}
+            title={historyLoading
+              ? t('screeningPage.history.loading')
+              : t('screeningPage.history.empty')}
+          />
         ) : (
-          <div className="divide-y divide-border/70">
+          <PlayfulList className="mt-2">
             {historyRuns.map((run) => (
-              <button
-                key={run.runId}
-                type="button"
-                className="flex w-full items-center justify-between gap-3 py-2.5 text-left transition-colors hover:bg-hover/50"
-                onClick={() => void handleHistoryRunSelect(run.runId)}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-semibold text-foreground">
-                    {formatHistoryStrategyName(run.strategy, strategies)}
-                    <span className="ml-2 text-xs font-normal text-secondary-text">
-                      {formatHistoryMarketLabel(run.market)}
+              <PlayfulListItem key={run.runId} density="compact" className="p-0">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-2.5 text-left transition-colors hover:bg-hover/40"
+                  onClick={() => void handleHistoryRunSelect(run.runId)}
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-foreground">
+                      {formatHistoryStrategyName(run.strategy, strategies)}
+                      <span className="ml-2 text-xs font-normal text-secondary-text">
+                        {formatHistoryMarketLabel(run.market)}
+                      </span>
+                    </span>
+                    <span className="mt-0.5 block text-xs text-secondary-text">
+                      {t('screeningPage.history.returnCount', { count: run.candidateCount ?? 0 })}
+                      {run.snapshotCount != null
+                        ? ` · ${t('screeningPage.history.snapshot', { count: run.snapshotCount })}`
+                        : ''}
+                      {run.llmRanked ? ` · ${t('screeningPage.history.llmRanked')}` : ''}
                     </span>
                   </span>
-                  <span className="mt-0.5 block text-xs text-secondary-text">
-                    返回 {run.candidateCount ?? 0} 只
-                    {run.snapshotCount != null ? ` · 快照 ${run.snapshotCount}` : ''}
-                    {run.llmRanked ? ' · 智能重排' : ''}
+                  <span className="shrink-0 text-xs text-secondary-text">
+                    {formatRunCreatedAt(run.createdAt)}
                   </span>
-                </span>
-                <span className="shrink-0 text-xs text-secondary-text">
-                  {formatRunCreatedAt(run.createdAt)}
-                </span>
-              </button>
+                </button>
+              </PlayfulListItem>
             ))}
-          </div>
+          </PlayfulList>
         )}
-      </section>
-    </AppPage>
+      </PlayfulCard>
+    </PlayfulPage>
   );
 };
 
