@@ -54,8 +54,29 @@ SCREENING_EASTMONEY_JITTER_SEC=0.3
 | `/api/v1/screening/history` | GET | 按策略、市场查询最近完成的选股运行摘要 |
 | `/api/v1/screening/history/{run_id}` | GET | 读取一条持久化的完整选股结果 |
 | `/api/v1/screening/source-history` | GET | 汇总历史运行中的快照源命中、错误和降级次数 |
+| `/api/v1/screening/tracking` | GET | 选股结果复盘：入选的收益 / 命中率 / 不可复盘原因 + 同期基准对比 |
 
 后台任务使用 `report_type=screening_screen`，Web 会保存活动任务 ID，并在页面恢复时继续轮询。任务状态会分别提示全市场快照、候选上下文、LLM 重排、最终评分和新闻事件增强等阶段；完成后的结果同时写入 DSA 数据库，因此服务重启后仍可按 `run_id` 查询。
+
+## 选股结果复盘与基准对比
+
+`GET /api/v1/screening/tracking` 只读既有数据，不新增表：入选来自 `screening_runs.result_json.candidates[]`（含选股时点价格），前瞻 K 线来自 `stock_daily`，两者按 `canonical_id` 对齐。
+
+**收益口径。** `return_pct` = 最新收盘价相对选股时点价格的涨跌幅；严格晚于入选日期的 K 线才算前瞻（选股价格已是入选日快照，同日收盘价会凭空造出一个约 0% 的"收益"）。取不到前瞻 K 线的入选计入 `untrackable` 并单列原因码（`missing_pick_price` / `unknown_identity` / `no_daily_rows` / `no_forward_bars`），`return_pct` 保持 `null`：既不当作 0% 收益，也不悄悄从命中率分母里消失（`hit_rate_basis=trackable_only`）。
+
+**基准区间随每只入选自己的窗口走。** 入选发生在不同日期，用同一个全局区间比基准会同时算错个股答案与汇总数字。每只入选的基准窗口是：
+
+```text
+起点 = 日期 <= 入选日的最后一条指数 K 线      （即入选时点的大盘点位）
+终点 = 日期 <= 该入选最新前瞻 K 线日的最后一条指数 K 线
+excess_return_pct = return_pct - benchmark_return_pct
+```
+
+起点用"入选日或之前最近一根"而不是要求同一交易日，是为了让节假日/非交易日入选也能对齐到当时的真实点位（例如 10-07 入选、10-01~10-08 休市时，起点是 09-30 收盘）。
+
+**绝不填 0、绝不换窗口。** 拿不到基准时 `benchmark_available=false`、`benchmark_return_pct` 与 `excess_return_pct` 均为 `null`，并给出机器原因码：`benchmark_series_missing`（本地无指数序列）、`benchmark_window_not_covered`（起点或终点落在指数覆盖范围之外）、`pick_untrackable`（入选自身不可复盘）、`benchmark_disabled`（功能关闭）。收益数字也绝不替代：`benchmark_comparable` / `beat_benchmark_denominator` 只统计"有可复盘收益且窗口被指数覆盖"的入选，`beat_benchmark_basis` 写明分母口径（`benchmark_comparable_trackable_picks` 或 `no_comparable_picks`）。`benchmark.window_basis` 恒为 `per_pick_window`。
+
+**指数数据怎么来。** `src/services/benchmark_index_service.py` 用 `ak.stock_zh_index_daily` 抓取沪深300 `sh000300`（默认还含中证500 `sh000905`、中证1000 `sh000852`，列表顺序即优先级），截取最近 800 个自然日后写入既有 `stock_daily`。指数行用**显式指数形式**作 `code`（`sh000300` 而非裸码 `000300`，裸码会被 canonical_id 推导当成个股）、`canonical_id` 由 `_derive_canonical_id` 推导、`data_source='akshare_index'` 标记；两个 `canonical_id` 自愈迁移都只处理裸码与 `canonical_id IS NULL` 的行，因此不会改写指数行。指数代码**不进入** `_tracked_daily_codes`（那条清单按个股口径抓取并打个股来源），而是由行情刷新任务在同一轮的 `finally` 中调用独立同步，fail-open 到单个指数粒度。配置见 `.env.example` 的 `SCREENING_PICK_TRACKING_*` 与 `SCREENING_BENCHMARK_INDEX_*`。
 
 ## 核心流程
 
@@ -146,6 +167,7 @@ DSA 中存在两类用途不同的策略文件：
 | 缓存目录变化 | 升级后旧缓存不会自动复用 | 新目录独立为 `data/screening`；升级前按需备份 |
 | 运行历史增长 | 完整候选结果会增加数据库体积 | 历史接口默认只读摘要，运维可按现有数据库备份/保留策略管理 |
 | 配置与 API 更名 | 旧自动化需同步调整 | 在发布说明明确 `SCREENING_ENABLED` 与 `/api/v1/screening` |
+| 基准指数行存入 `stock_daily` | 按全表统计"股票数"的运维视图（`scripts/check_env.py`、数据清单卡片）会把指数算进去 | 指数行用显式 `sh` 前缀 `code` + `data_source='akshare_index'` 标记；所有业务读路径本就按显式 `code` / `canonical_id` 过滤 |
 | 许可证归因遗漏 | 发布合规风险 | 保留 LICENSE、THIRD_PARTY_NOTICES 和衍生文件头 |
 
 选股结果仅用于研究和辅助判断，不构成投资建议，也不保证收益或数据完整性。
