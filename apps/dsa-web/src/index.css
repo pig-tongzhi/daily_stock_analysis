@@ -2936,3 +2936,147 @@ textarea {
     text-align: left;
   }
 }
+
+/* =========================================
+   卡通友好（playful）首页令牌
+   -----------------------------------------
+   设计稿（/tmp/mockups/3-playful.html）本身把暖奶油色写死在 :root 里，
+   那会在深色主题下变成一块发光的白纸。这里改为“主题感知令牌”：
+   浅色主题用暖纸底 + 高圆角 + 厚软阴影，深色主题改用暖调深灰（而不是
+   冷黑），保证两种主题都是刻意设计过的效果，而不是某一侧塌掉。
+   强调色只保留少量语义色（命中/超额/基准），其余保持项目既有的
+   克制的黑白灰基调。
+   ========================================= */
+:root {
+  /* 暖色表面（浅色主题：奶油纸质感） */
+  --playful-bg: #fbf4ea;
+  --playful-surface: #fffaf3;
+  --playful-surface-soft: #fdf6ee;
+  --playful-chip-bg: #fdf5ec;
+  --playful-border: hsl(28 34% 88%);
+  --playful-line: hsl(28 40% 91%);
+  --playful-hero-border: hsl(28 45% 90%);
+  /* 中性卡片底色：与既有黑白主题一致，避免整页被染成粉色 */
+  --playful-plain-card: hsl(var(--card));
+  /* 三块低饱和点缀色，只用于语义区块（AI 命中 / 情绪 / 选股复盘） */
+  --playful-tint-a: hsl(22 90% 96%);
+  --playful-tint-b: hsl(205 80% 96%);
+  --playful-tint-c: hsl(44 95% 94%);
+  /* 厚软阴影：卡通友好的“贴纸”感，来自设计稿的 0 3px 0 */
+  --playful-shadow: 0 3px 0 hsl(28 34% 90% / 0.7), 0 1px 2px hsl(28 30% 40% / 0.05);
+  --playful-shadow-soft: 0 2px 0 hsl(28 34% 90% / 0.6);
+  /* 图表/进度条轨道 */
+  --playful-track: hsl(28 24% 93%);
+  /* 深色文字与辅助文字（在暖底上比纯灰更亲和） */
+  --playful-ink: hsl(24 18% 20%);
+  --playful-ink-soft: hsl(24 12% 44%);
+  --playful-mint: hsl(158 55% 34%);
+  --playful-grape: hsl(258 60% 52%);
+  --playful-sun: hsl(38 70% 34%);
+  --playful-gauge-track: hsl(28 24% 91%);
+  /* 大盘涨跌沿用 A 股习惯：红涨绿跌 */
+  --playful-up: #d8384f;
+  --playful-down: #0f9d6c;
+  /* 底部提示条的暖黄 */
+  --playful-note-bg: hsl(44 92% 95%);
+  --playful-note-ink: hsl(38 55% 32%);
+}
+
+.dark {
+  /* 深色主题：暖调深灰，和冷黑背景区分开，但不比正文更亮 */
+  --playful-bg: hsl(24 8% 7%);
+  --playful-surface: hsl(24 9% 10%);
+  --playful-surface-soft: hsl(24 10% 12%);
+  --playful-chip-bg: hsl(24 10% 13%);
+  --playful-border: hsl(24 10% 20%);
+  --playful-line: hsl(24 10% 20% / 0.7);
+  --playful-hero-border: hsl(24 12% 22%);
+  --playful-plain-card: hsl(var(--card));
+  --playful-tint-a: hsl(22 40% 15%);
+  --playful-tint-b: hsl(205 35% 15%);
+  --playful-tint-c: hsl(44 35% 15%);
+  /* 深色下取消“厚底边”，改回细边框 + 更深的投影，否则像浮雕 */
+  --playful-shadow: 0 1px 0 hsl(24 20% 4% / 0.9), 0 2px 8px hsl(0 0% 0% / 0.35);
+  --playful-shadow-soft: 0 1px 2px hsl(0 0% 0% / 0.3);
+  --playful-track: hsl(24 10% 17%);
+  --playful-ink: hsl(30 14% 92%);
+  --playful-ink-soft: hsl(28 10% 66%);
+  --playful-mint: hsl(158 52% 58%);
+  --playful-grape: hsl(258 70% 74%);
+  --playful-sun: hsl(40 80% 66%);
+  --playful-gauge-track: hsl(24 10% 18%);
+  --playful-up: #ff7186;
+  --playful-down: #43d3a2;
+  --playful-note-bg: hsl(44 30% 16%);
+  --playful-note-ink: hsl(42 70% 74%);
+}
+
+/* 页面留白也换成暖色，避免奶油卡片贴在冷白底上显得“贴偏了” */
+.playful-page {
+  background: var(--playful-bg);
+}
+
+.playful-card {
+  border-radius: 1.25rem; /* 20px，设计稿的“大圆角”下限 */
+  border: 1px solid var(--playful-border);
+  background: var(--playful-plain-card);
+  box-shadow: var(--playful-shadow);
+}
+
+.playful-card-soft {
+  border-radius: 1.25rem;
+  border: 1px solid var(--playful-hero-border);
+  background: var(--playful-surface);
+  box-shadow: var(--playful-shadow-soft);
+}
+
+/* 顶部问候条：三块低饱和点缀色的暖渐变，深色主题下换成暗色调，
+   仍然保留“有颜色但不刺眼”的取向。 */
+.playful-hero {
+  border-radius: 1.5rem; /* 24px */
+  border: 1px solid var(--playful-hero-border);
+  background: linear-gradient(100deg, var(--playful-tint-a) 0%, var(--playful-tint-b) 55%, var(--playful-tint-c) 100%);
+  box-shadow: var(--playful-shadow);
+}
+
+.playful-chip {
+  border-radius: 0.875rem;
+  background: var(--playful-chip-bg);
+  box-shadow: var(--playful-shadow-soft);
+}
+
+.playful-pill {
+  border-radius: 9999px;
+  background: var(--playful-chip-bg);
+  color: var(--playful-ink);
+}
+
+.playful-track {
+  background: var(--playful-track);
+}
+
+.playful-note {
+  border-radius: 0.875rem;
+  background: var(--playful-note-bg);
+  color: var(--playful-note-ink);
+}
+
+/* 分栏用的虚线分隔，比实线更轻，符合“不吓人”的目标 */
+.playful-dashed {
+  border-color: var(--playful-line);
+}
+
+.playful-ink-soft {
+  color: var(--playful-ink-soft);
+}
+
+/* -----------------------------------------
+   趣味首页内的既有组件覆盖
+   ----------------------------------------- */
+/* ScoreGauge 的背景轨道原本写的是 rgba(255,255,255,.05)，那是给深色终端主题的；
+   放到浅色奶油卡片上会完全看不见，仪表盘看起来像“只有一小段”。这里只在首页看板的
+   范围内把轨道换成主题感知的颜色，不改动 ScoreGauge 在其它页面（报告页）的既有观感。 */
+:root:not(.dark) [data-testid="playful-hit-rate-gauge"] .gauge-ring circle:first-of-type {
+  stroke: var(--playful-gauge-track);
+}
+

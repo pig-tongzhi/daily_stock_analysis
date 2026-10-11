@@ -1,9 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { analysisApi, DuplicateTaskError } from '../../api/analysis';
 import { agentApi } from '../../api/agent';
 import { historyApi } from '../../api/history';
+import { screeningApi } from '../../api/screening';
 import { systemConfigApi } from '../../api/systemConfig';
 import { UiLanguageProvider } from '../../contexts/UiLanguageContext';
 import { useTaskStream } from '../../hooks/useTaskStream';
@@ -89,6 +90,51 @@ vi.mock('../../api/decisionSignals', () => ({
 
 vi.mock('../../api/intelligence', () => ({
   fetchIntelligenceItems: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 5 }),
+}));
+
+// 首页看板的“选股复盘”卡片走既有 /api/v1/screening/tracking。
+// 不隔离会打到真实网络，并在断言 role="alert" 时混入看板的错误提示。
+vi.mock('../../api/screening', () => ({
+  screeningApi: {
+    getTracking: vi.fn().mockResolvedValue({
+      enabled: false,
+      windowDays: 60,
+      generatedAt: '2026-10-11T22:23:02+00:00',
+      runWindow: { days: 60, malformedRuns: 0 },
+      total: {
+        picks: 0,
+        trackable: 0,
+        untrackable: 0,
+        hitRate: null,
+        hitRateBasis: 'trackable_only',
+        avgReturnPct: null,
+        medianReturnPct: null,
+        bestReturnPct: null,
+        worstReturnPct: null,
+        avgDaysHeld: null,
+        benchmarkCode: null,
+        benchmarkComparable: 0,
+        beatBenchmarkRate: null,
+        beatBenchmarkBasis: 'benchmark_comparable_trackable_picks',
+        beatBenchmarkDenominator: 0,
+        avgBenchmarkReturnPct: null,
+        medianBenchmarkReturnPct: null,
+        avgExcessReturnPct: null,
+        medianExcessReturnPct: null,
+        benchmarkUnavailableReasons: [],
+      },
+      strategies: [],
+      picks: [],
+      untrackable: [],
+      untrackableReasons: [],
+      dataFreshness: {
+        stockDailyLatestDate: null,
+        stockDailySeriesCount: null,
+        latestTrackableBarDate: null,
+        pickForwardBarsAvailable: false,
+      },
+    }),
+  },
 }));
 
 vi.mock('../../hooks/useTaskStream', () => ({
@@ -254,6 +300,9 @@ const runFlowSnapshot: RunFlowSnapshot = {
 describe('HomePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 本文件里有个别用例用 mockImplementation 处理 MARKET 查询；clearAllMocks 不会
+    // 撤销 implementation，会渗到后面的用例，因此这里显式复位 historyApi.getList。
+    vi.mocked(historyApi.getList).mockReset();
     navigateMock.mockReset();
     stockIndexItems = [];
     stockIndexLoading = false;
@@ -270,6 +319,10 @@ describe('HomePage', () => {
       tasks: [],
     });
     vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue([]);
+    // 同样是清理残留 implementation：有个用例会注入两只个股的 stock-bar，
+    // 不在这里复位会让后面的“空个股列表”用例看到上一条用例的数据。
+    vi.mocked(historyApi.getStockBarList).mockReset();
+    vi.mocked(historyApi.getStockBarList).mockResolvedValue({ total: 0, items: [] });
     vi.mocked(agentApi.getSkills).mockResolvedValue({ skills: [], default_skill_id: '' });
     vi.mocked(historyApi.getDiagnostics).mockResolvedValue({
       status: 'unknown',
@@ -323,6 +376,140 @@ describe('HomePage', () => {
       }),
     ).toBeInTheDocument();
     expect(historyApi.getMarkdown).not.toHaveBeenCalled();
+  });
+
+  it('feeds the playful dashboard with real stock-bar and market-review rows', async () => {
+    // 自选股只有这里一处真源：/api/v1/stocks/watchlist
+    vi.mocked(systemConfigApi.getWatchlist).mockResolvedValue(['603103', '688063']);
+    // 个股情绪分 / 分析次数 / 市场阶段来自既有 stock-bar 接口
+    vi.mocked(historyApi.getStockBarList).mockResolvedValue({
+      total: 2,
+      items: [
+        {
+          id: 67,
+          stockCode: '603103',
+          stockName: '横店影视',
+          reportType: 'simple',
+          sentimentScore: 45,
+          operationAdvice: '观望',
+          action: 'watch',
+          actionLabel: '观望',
+          analysisCount: 6,
+          lastAnalysisTime: '2026-10-12T02:52:00.516180+08:00',
+          marketPhaseSummary: { market: 'cn', phase: 'premarket', warnings: [] },
+          assetType: 'stock',
+        },
+        {
+          id: 66,
+          stockCode: '688063',
+          stockName: '派能科技',
+          reportType: 'simple',
+          sentimentScore: 60,
+          operationAdvice: '观望',
+          action: 'buy',
+          actionLabel: '买入',
+          analysisCount: 6,
+          lastAnalysisTime: '2026-10-12T02:51:34.816536+08:00',
+          marketPhaseSummary: { market: 'cn', phase: 'premarket', warnings: [] },
+          assetType: 'stock',
+        },
+      ],
+    });
+    // 恐惧贪婪指数唯一真源：大盘复盘记录的 sentiment_score（MARKET 行）
+    vi.mocked(historyApi.getList).mockImplementation(
+      async (params: { stockCode?: string } = {}) => {
+        if (params.stockCode === 'MARKET') {
+          return {
+            total: 20,
+            page: 1,
+            limit: 1,
+            items: [{
+              id: 61,
+              queryId: 'market-q-61',
+              stockCode: 'MARKET',
+              stockName: '大盘复盘',
+              reportType: 'market_review',
+              sentimentScore: 50,
+              createdAt: '2026-10-12T02:47:18.357354+08:00',
+            }],
+          } as Awaited<ReturnType<typeof historyApi.getList>>;
+        }
+        return { total: 0, page: 1, limit: 20, items: [] };
+      },
+    );
+    // 选股复盘走既有 tracking 接口，首页不得自己重算
+    vi.mocked(screeningApi.getTracking).mockResolvedValue({
+      enabled: true,
+      windowDays: 60,
+      generatedAt: '2026-10-11T22:23:02+00:00',
+      runWindow: { days: 60, malformedRuns: 0 },
+      total: {
+        picks: 121,
+        trackable: 39,
+        untrackable: 82,
+        hitRate: 0.6154,
+        hitRateBasis: 'trackable_only',
+        avgReturnPct: 0.47,
+        medianReturnPct: 0.21,
+        bestReturnPct: 14.74,
+        worstReturnPct: -5.29,
+        avgDaysHeld: 1.9,
+        benchmarkCode: 'sh000300',
+        benchmarkComparable: 39,
+        beatBenchmarkRate: 0.8974,
+        beatBenchmarkBasis: 'benchmark_comparable_trackable_picks',
+        beatBenchmarkDenominator: 39,
+        avgBenchmarkReturnPct: -0.85,
+        medianBenchmarkReturnPct: -0.93,
+        avgExcessReturnPct: 1.32,
+        medianExcessReturnPct: 1.1,
+        benchmarkUnavailableReasons: [],
+      },
+      strategies: [],
+      picks: [],
+      untrackable: [],
+      untrackableReasons: [],
+      dataFreshness: {
+        stockDailyLatestDate: '2026-10-09',
+        stockDailySeriesCount: 64,
+        latestTrackableBarDate: '2026-10-09',
+        pickForwardBarsAvailable: true,
+      },
+    } as unknown as Awaited<ReturnType<typeof screeningApi.getTracking>>);
+
+    render(
+      <MemoryRouter>
+        <HomePage />
+      </MemoryRouter>,
+    );
+
+    // 真实恐惧贪婪指数 50（不是设计稿里编造的 42）
+    const sentimentCard = await screen.findByTestId('playful-sentiment-card');
+    await waitFor(() => {
+      expect(within(sentimentCard).getByTestId('playful-sentiment-value')).toHaveTextContent('50');
+    });
+    expect(within(sentimentCard).queryByText('42')).toBeNull();
+
+    // 自选股 chips 用真实的情绪分与分析次数
+    const watchlistCard = await screen.findByTestId('playful-watchlist-card');
+    const chips = await within(watchlistCard).findAllByTestId('playful-stock-chip');
+    expect(chips).toHaveLength(2);
+    // 测试用股票索引里没有 603103，名称按既有回退规则显示原始代码
+    expect(within(chips[0]).getAllByText('603103').length).toBeGreaterThan(0);
+    expect(within(chips[0]).getByText('45')).toBeInTheDocument();
+    expect(within(chips[0]).getByText(/已分析 6 次/)).toBeInTheDocument();
+    expect(within(chips[0]).queryByText('51')).toBeNull();
+    expect(within(chips[1]).getByText('60')).toBeInTheDocument();
+
+    // 选股复盘五项指标全部来自 tracking
+    const screeningCard = await screen.findByTestId('playful-screening-card');
+    await waitFor(() => {
+      expect(within(screeningCard).getByText('121')).toBeInTheDocument();
+    });
+    expect(within(screeningCard).getByText('+0.47%')).toBeInTheDocument();
+    expect(within(screeningCard).getByText('+1.32%')).toBeInTheDocument();
+    expect(within(screeningCard).getByText('90%')).toBeInTheDocument();
+    expect(vi.mocked(screeningApi.getTracking)).toHaveBeenCalledWith({ days: 60 });
   });
 
   it('loads markdown only after opening the full report drawer', async () => {

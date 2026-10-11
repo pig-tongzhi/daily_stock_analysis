@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+- [新功能] 首页改版为「卡通友好」风格：暖色问候条、命中率圆环、市场情绪、今日资讯、选股复盘、自选股卡片
+- [改进] 首页全部数字取自真实数据源；无可信来源的字段（情绪前值、逐股分析次数补全、缺失评分）一律不显示而非补假值
+- [改进] 新增 `--playful-*` 主题令牌，亮色为暖奶油、暗色为刻意配的暖调深灰（非冷黑）；语义色仍沿用既有 success/warning/danger 与 A 股红涨绿跌
+- [修复] 命中率圆环组件 `ScoreGauge` 的轨道在浅色卡片上不可见（硬编码白色半透明），已在首页作用域内覆盖为主题色，组件本身未改
+- [测试] 首页看板与 HomePage 测试同步更新；`vitest run` 1276 passed（仅既有 DecisionSignalsPage 用例失败）
 - [新功能] 选股结果复盘：新增 `GET /api/v1/screening/tracking` 与选股页「选股结果复盘」区块，用已存的 `screening_runs.result_json`（含选股时点价格）对齐 `stock_daily` 前瞻 K 线，输出命中率 / 平均收益 / 中位数 / 最大回撤。**不新增任何表**：入选来自既有 result_json，前瞻价格来自既有 stock_daily。拿不到前瞻 K 线的入选显式计入 `untrackable` 并单列原因（`no_daily_rows` / `no_forward_bars` / `missing_pick_price` / `unknown_identity`），既不当成 0% 收益、也不从命中率分母里消失 —— 此前 24 次选股选中的 49 只股票里只有 1 只有 K 线，"上次选的股票后来怎么样了"因此无法回答。
 - [改进] 行情刷新清单纳入最近选股入选：`_tracked_daily_codes` 在自选股与判断标的基础上追加回看窗口（默认 60 天）内的选股入选，与既有条目去重、上限 200 只（刷新循环串行、每只一次网络请求，不设上限时单轮耗时会超过刷新间隔本身）；解析失败 fail-open 退回原清单。新增 `SCREENING_PICK_TRACKING_ENABLED=true` / `SCREENING_PICK_TRACKING_DAYS=60` / `SCREENING_PICK_TRACKING_MAX_CODES=200`。
 - [测试] 新增 `tests/test_screening_tracking_service.py`：已知选股价 + 之后收盘价的收益计算、不可复盘入选不计入命中率分母（构造"按 0% 计入会改变答案"的反例）、畸形 `result_json` 不抛异常、`_tracked_daily_codes` 覆盖选股入选 / 去重 / 上限 / 窗口过滤 / fail-open；全部跑在内存库上，不接触生产库。

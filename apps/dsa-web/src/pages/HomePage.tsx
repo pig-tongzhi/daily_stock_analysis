@@ -1444,6 +1444,22 @@ const HomePage: React.FC = () => {
     });
   }, [marketReviewHistoryItems, stockBarItems, t]);
 
+  // 首页顶部看板的“+ 关注”入口只负责把光标送回既有的搜索框，
+  // 自选股增删仍然只有 HomeStockWorkspace / 报告页那一套入口，不在看板里另开一套写操作。
+  const focusDashboardSearch = useCallback(() => {
+    if (typeof document !== 'undefined') {
+      // 搜索框由 StockAutocomplete 自己渲染，父组件拿不到 ref；首页在 DOM 里是单例，
+      // 因此按它的 role=combobox / fallback 的 data 属性定位即可。
+      const input = document.querySelector(
+        '[data-testid="home-dashboard"] input[role="combobox"], [data-testid="home-dashboard"] input[data-autocomplete-mode]',
+      );
+      if (input instanceof HTMLInputElement) {
+        input.focus();
+      }
+    }
+    dashboardScrollRef.current?.scrollTo?.({ top: 0, behavior: 'smooth' });
+  }, []);
+
   const sidebarContent = useMemo(
     () => (
       <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
@@ -1517,7 +1533,7 @@ const HomePage: React.FC = () => {
   return (
     <div
       data-testid="home-dashboard"
-      className="flex h-[calc(100vh-5rem)] w-full flex-col overflow-hidden md:flex-row sm:h-[calc(100vh-5.5rem)] lg:h-[calc(100vh-2rem)]"
+      className="playful-page flex h-[calc(100vh-5rem)] w-full flex-col overflow-hidden md:flex-row sm:h-[calc(100vh-5.5rem)] lg:h-[calc(100vh-2rem)]"
     >
       <div className="flex-1 flex flex-col min-h-0 min-w-0 max-w-full lg:max-w-6xl mx-auto w-full">
         <header className="relative z-30 flex min-w-0 flex-shrink-0 items-center overflow-visible px-3 py-3 md:px-4 md:py-4">
@@ -1726,10 +1742,13 @@ const HomePage: React.FC = () => {
             className="flex-1 min-w-0 min-h-0 overflow-x-auto overflow-y-auto px-3 pb-4 md:px-6 touch-pan-y"
           >
             {/* 首页曾经只有“开始分析”空态，打开后看不到任何结论；这里把已落库的真实数据
-                （AI 建议 / 资讯 / 分析历史 / 自选股）作为内容区第一块展示，原有分析与报告视图保留在下方。 */}
+                （AI 建议 / 资讯 / 选股复盘 / 自选股）作为内容区第一块展示，原有分析与报告视图保留在下方。 */}
             <HomeDashboard
               watchlistCodes={watchlistState.watchlistCodes}
               watchlistLoading={watchlistState.isLoading}
+              stockBarItems={stockBarItems}
+              marketReviewHistoryItems={marketReviewHistoryItems}
+              onFocusSearch={focusDashboardSearch}
             />
 
             {marketReviewNotice ? (
