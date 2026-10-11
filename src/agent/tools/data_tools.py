@@ -493,8 +493,123 @@ get_analysis_context_tool = ToolDefinition(
 # get_stock_info
 # ============================================================
 
+def _local_stock_info_response(stock_code: str, local: dict) -> dict:
+    """把本地档案 + 本地估值组装成 get_stock_info 的响应（不联网）。
+
+    为什么保留全部**原有顶层键**：这个工具的返回会被多智能体（intel / risk /
+    portfolio）与问股主流程读取，改名或删键等于静默改契约。所以本地路径与实时路径
+    返回同一组顶层键，只是值来自本地，并额外加 ``data_source`` 等键说明来源。
+
+    代价要说清楚：本地没有 belong_boards 原始板块与 sector_rankings（它们只存在于
+    实时基本面管线里），这两项在本地路径下为空，用 ``local_limitations`` 明示，
+    而不是让调用方以为"这只票没有板块"。
+    """
+    valuation_block = local.get("valuation") or {}
+    industry = local.get("industry") or {}
+
+    fundamental_context = {
+        "market": local.get("market"),
+        # 明确区别于实时管线的 status 取值，调用方一眼能看出这是本地快照。
+        "status": "local_snapshot",
+        "coverage": {},
+        "valuation": {
+            "status": "local" if valuation_block else "unavailable",
+            "data": {
+                "pe_ratio": valuation_block.get("pe_ttm"),
+                "pb_ratio": valuation_block.get("pb"),
+                "total_mv": valuation_block.get("total_mv"),
+                "circ_mv": valuation_block.get("circ_mv"),
+            },
+            "as_of": valuation_block.get("as_of"),
+        },
+        "source": "local",
+    }
+
+    local_limitations = []
+    if not valuation_block:
+        local_limitations.append("no_local_valuation")
+    if local.get("missing_fields"):
+        local_limitations.append("local_profile_has_missing_fields")
+    local_limitations.append("belong_boards_and_sector_rankings_only_available_live")
+
+    return {
+        "code": stock_code.upper(),
+        "name": local.get("name") or stock_code.upper(),
+        "pe_ratio": valuation_block.get("pe_ttm"),
+        "pb_ratio": valuation_block.get("pb"),
+        "total_mv": valuation_block.get("total_mv"),
+        "circ_mv": valuation_block.get("circ_mv"),
+        "fundamental_context": fundamental_context,
+        # 本地无原始板块列表，保持键存在但为空（见 docstring 的取舍说明）。
+        "belong_boards": [],
+        "boards": [],
+        "sector_rankings": {},
+        "data_source": "local",
+        "data_source_reason": "local_profile_and_valuation_fresh",
+        # 本地读到的行业/地域/概念，补上实时管线里同名的信息（键名不与旧键冲突）。
+        "local_profile": {
+            "canonical_id": local.get("canonical_id"),
+            "market": local.get("market"),
+            "industry": industry,
+            "region": local.get("region"),
+            "concepts": local.get("concepts") or [],
+            "missing_fields": local.get("missing_fields") or [],
+            "profile_updated_at": local.get("profile_updated_at"),
+            "valuation_as_of": local.get("valuation_as_of"),
+        },
+        "local_limitations": local_limitations,
+    }
+
+
 def _handle_get_stock_info(stock_code: str) -> dict:
-    """Get stock fundamental information through unified fundamental context."""
+    """Get stock fundamental information, **local-first**.
+
+    为什么改成先查库（见 docs/architecture/OVERVIEW.md 第 5、7 节）：
+
+    旧实现无条件调用 ``manager.get_fundamental_context()`` 实时抓取。于是每次问股
+    都重新抓一遍，数据源限流（实测东方财富已拒绝连接）会直接变成问股失败，
+    而 company_profile / company_metrics 里明明有可用副本。本地优先把"数据源抖动"
+    和"问股能不能回答"解耦：只要本地快照还在有效期内，就不碰网络。
+
+    有效期（"过期"的明确定义，见 local_data_tools）：
+    * company_profile.updated_at 超过 **30 天** → 过期（行业/概念是慢变量）；
+    * company_metrics.as_of 超过 **7 天** → 过期（估值是快变量，价格天天动）。
+    任一过期或时间戳缺失，就回退实时抓取 —— 这是"本地优先"，不是"只用本地"，
+    回退路径的行为与改造前完全一致。
+
+    ``data_source`` 的三种取值：
+    * ``"local"``                    本地档案+估值齐全且都在有效期内；
+    * ``"live"``                     本地根本没有档案（从未抓取过），走实时；
+    * ``"local_stale_fallback_live"`` 本地有档案但已过期，回退实时。
+    """
+    # 延迟导入：避免 data_tools ↔ local_data_tools 在模块导入期相互牵扯。
+    from src.agent.tools.local_data_tools import _handle_get_company_profile, evaluate_local_freshness
+
+    local_profile = None
+    try:
+        local_profile = _handle_get_company_profile(stock_code)
+    except Exception as exc:
+        # 本地读取异常绝不能变成问股失败：降级为"没有本地数据"，继续走实时。
+        logger.warning(f"get_stock_info local profile lookup failed for {stock_code}: {exc}")
+
+    if local_profile and local_profile.get("success"):
+        stale_reasons = evaluate_local_freshness(local_profile)
+        if not stale_reasons:
+            return _local_stock_info_response(stock_code, local_profile)
+        data_source = "local_stale_fallback_live"
+        data_source_reason = "; ".join(stale_reasons)
+    else:
+        stale_reasons = []
+        data_source = "live"
+        # 如实带上本地失败的原因（no_local_profile / unresolved_stock_identity /
+        # db_query_failed / local_lookup_failed），而不是一律写成"没有档案"。
+        if local_profile is None:
+            data_source_reason = "local_lookup_failed"
+        else:
+            data_source_reason = (
+                local_profile.get("reason") or "local_profile_unavailable"
+            )
+
     manager = _get_fetcher_manager()
     try:
         fundamental_context = manager.get_fundamental_context(stock_code)
@@ -526,6 +641,11 @@ def _handle_get_stock_info(stock_code: str) -> dict:
         # Planned for future deprecation in a major version.
         "boards": belong_boards,
         "sector_rankings": sector_rankings,
+        "data_source": data_source,
+        "data_source_reason": data_source_reason,
+        # 回退时把本地那份也带上，让调用方知道"本地有什么、为什么没用它"。
+        "local_snapshot": local_profile if (local_profile and local_profile.get("success")) else None,
+        "local_stale_reasons": stale_reasons,
     }
 
 
@@ -533,7 +653,11 @@ get_stock_info_tool = ToolDefinition(
     name="get_stock_info",
     description="Get stock fundamental information: valuation, growth, earnings, institution flow, "
                 "stock sector membership (belong_boards; boards is compatibility alias) and "
-                "sector rankings. Returns a compact fundamental_context to reduce token usage.",
+                "sector rankings. Returns a compact fundamental_context to reduce token usage. "
+                "Reads the local database first (fresh company profile + valuation return "
+                "data_source='local' with no network call); falls back to a live fetch when "
+                "local data is missing or stale. Always check data_source to know which one "
+                "you got: 'local' | 'live' | 'local_stale_fallback_live'.",
     parameters=[
         ToolParameter(
             name="stock_code",

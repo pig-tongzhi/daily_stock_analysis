@@ -5,6 +5,7 @@ Contract tests for get_stock_info tool output semantics.
 
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -65,11 +66,44 @@ class _DummyManager:
 
 
 class TestGetStockInfoContract(unittest.TestCase):
+    def setUp(self) -> None:
+        """Force the live path by pointing at an empty database.
+
+        get_stock_info is now local-first: on a database that already has a fresh
+        company_profile for 600519 (the app database does), it would return local
+        data and the live-manager assertions below would never run. An isolated
+        empty database makes the local lookup return ``no_local_profile`` so this
+        test keeps pinning the original live contract. It also keeps the test off
+        the application database entirely.
+        """
+        from src.config import Config
+        from src.storage import DatabaseManager
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._old_database_path = os.environ.get("DATABASE_PATH")
+        os.environ["DATABASE_PATH"] = os.path.join(self._tmpdir.name, "empty.db")
+        Config.reset_instance()
+        DatabaseManager.reset_instance()
+
+    def tearDown(self) -> None:
+        from src.config import Config
+        from src.storage import DatabaseManager
+
+        DatabaseManager.reset_instance()
+        Config.reset_instance()
+        if self._old_database_path is None:
+            os.environ.pop("DATABASE_PATH", None)
+        else:
+            os.environ["DATABASE_PATH"] = self._old_database_path
+        self._tmpdir.cleanup()
+
     def test_get_stock_info_preserves_board_semantics(self) -> None:
         manager = _DummyManager()
         with patch("src.agent.tools.data_tools._get_fetcher_manager", return_value=manager):
             result = _handle_get_stock_info("600519")
 
+        # 空库 → 没有本地档案 → 必须走实时，且来源要如实标注
+        self.assertEqual(result["data_source"], "live")
         self.assertEqual(result["name"], "贵州茅台")
         self.assertEqual(result["code"], "600519")
         self.assertEqual(result["pe_ratio"], 12.3)

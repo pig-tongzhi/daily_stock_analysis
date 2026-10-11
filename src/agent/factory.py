@@ -360,6 +360,7 @@ def _build_tool_registry(category_timeout_map):
     from src.agent.tools.analysis_tools import ALL_ANALYSIS_TOOLS
     from src.agent.tools.search_tools import ALL_SEARCH_TOOLS
     from src.agent.tools.intelligence_tools import ALL_LOCAL_INTELLIGENCE_TOOLS
+    from src.agent.tools.local_data_tools import ALL_LOCAL_DATA_TOOLS
     from src.agent.tools.market_tools import ALL_MARKET_TOOLS
     from src.agent.tools.backtest_tools import ALL_BACKTEST_TOOLS
 
@@ -369,6 +370,9 @@ def _build_tool_registry(category_timeout_map):
         + ALL_ANALYSIS_TOOLS
         + ALL_SEARCH_TOOLS
         + ALL_LOCAL_INTELLIGENCE_TOOLS
+        # L2 事实层的本地只读工具（company_profile / market_snapshot）：
+        # 让问股在数据源故障时仍能回答行业与全市场分位，见 OVERVIEW 第 7 节第一步。
+        + ALL_LOCAL_DATA_TOOLS
         + ALL_MARKET_TOOLS
         + ALL_BACKTEST_TOOLS
     ):
