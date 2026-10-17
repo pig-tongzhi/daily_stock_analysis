@@ -1481,7 +1481,16 @@ LITELLM_FALLBACK_MODELS=anthropic/claude-sonnet-4-6,openai/gpt-5.4-mini
 
 - **模型优先级**：`VISION_MODEL` > `LITELLM_MODEL` > 根据已有 API Key 推断（`OPENAI_VISION_MODEL` 已废弃，请改用 `VISION_MODEL`）
 - **Provider 回退**：主模型失败时，按 `VISION_PROVIDER_PRIORITY`（默认 `gemini,anthropic,openai`）自动切换到下一个可用 provider
-- **主模型不支持 Vision 时**：若主模型为 DeepSeek 等非 Vision 模型，可显式配置 `VISION_MODEL=openai/gpt-5.5` 或 `gemini/gemini-3.1-pro-preview` 供图片提取使用
+- **DeepSeek 也能做图片识别（2026-10-17 实测）**：DeepSeek 的 chat 模型本身接受图片输入，但当前 litellm 的 `deepseek/` provider **不会把图片内容传给模型**（模型会回「无法查看图片」并返回空结果）。要让图片提取走 DeepSeek，必须改用 OpenAI 兼容路由：
+
+  ```bash
+  VISION_MODEL=openai/deepseek-chat
+  OPENAI_API_KEY=<与 DEEPSEEK_API_KEY 相同的值>
+  OPENAI_BASE_URL=https://api.deepseek.com
+  ```
+
+  注意：只写 `VISION_MODEL=deepseek/deepseek-chat` 是不够的 —— 即使 Key 有效，模型也收不到图，表现为接口返回 `{"codes":[],"raw_text":"[]"}` 而无任何报错。
+- **换成其它视觉模型时**：可配 `VISION_MODEL=openai/gpt-5.5` 或 `gemini/gemini-3.1-pro-preview`，需同时配对应 provider 的 Key；Gemini 为境外服务，国内环境需要代理
 - **配置校验**：若配置了 `VISION_MODEL` 但未配置对应 provider 的 API Key，启动时会输出 warning，图片提取功能将不可用
 
 ### 调试模式

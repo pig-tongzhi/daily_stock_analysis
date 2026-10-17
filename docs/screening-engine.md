@@ -64,6 +64,18 @@ SCREENING_EASTMONEY_JITTER_SEC=0.3
 
 **收益口径。** `return_pct` = 最新收盘价相对选股时点价格的涨跌幅；严格晚于入选日期的 K 线才算前瞻（选股价格已是入选日快照，同日收盘价会凭空造出一个约 0% 的"收益"）。取不到前瞻 K 线的入选计入 `untrackable` 并单列原因码（`missing_pick_price` / `unknown_identity` / `no_daily_rows` / `no_forward_bars`），`return_pct` 保持 `null`：既不当作 0% 收益，也不悄悄从命中率分母里消失（`hit_rate_basis=trackable_only`）。
 
+**固定持有期回测（`t1` / `t3` / `t5` / `t10`）。** `return_pct` 的右端点是"最新一根前瞻 K 线"，每只入选的持有天数因此各不相同（实测平均 6.9 天）：既不能横向比较，也回答不了"这个策略该拿几天"。所以同一接口另外给出四个固定档位（`FIXED_HORIZONS = (1, 3, 5, 10)`）：
+
+```text
+入场 = 入选日之后第一个交易日的开盘价（entry_basis = next_open）
+出场 = 第 N 个交易日的收盘价
+tN_return_pct = (出场 - 入场) / 入场 × 100
+```
+
+**为什么入场不用选股快照价。** 快照价多数等于"信号所用那一天的收盘价"，现实中回不到过去成交；周末/假期跑出来的信号与可下单时点之间还会隔好几天（例如 10-10 周六选股、快照价是 10-09 收盘）。用次日开盘既可执行，也顺带消掉了这段跨日错配。仅当开盘价缺失时才退到同一根 K 线的收盘价，并在 `entry_basis` 标为 `next_close`（这是真实成交价，但不假装知道开盘）。
+
+**前瞻 K 线不足 N 根时该档位为 `null`**，绝不缩短窗口凑出一个数字。因此每个档位的分母单独给出：`horizons.tN.n` / `win` / `win_rate` / `avg_return_pct` / `median_return_pct` / `worst_return_pct`；`horizons.tN.n` 可能小于 `trackable`。空档位返回 `n=0` 且 `win_rate=null`。整体 `total` 与每个策略行都带同一套 `horizons`；顶层 `horizons.windows` / `entry_basis` / `entry_rule` / `exit_rule` 写明档位与出入场规则，下游不需要猜"T+5 是从哪天买、买到哪天"。
+
 **基准区间随每只入选自己的窗口走。** 入选发生在不同日期，用同一个全局区间比基准会同时算错个股答案与汇总数字。每只入选的基准窗口是：
 
 ```text
@@ -77,6 +89,67 @@ excess_return_pct = return_pct - benchmark_return_pct
 **绝不填 0、绝不换窗口。** 拿不到基准时 `benchmark_available=false`、`benchmark_return_pct` 与 `excess_return_pct` 均为 `null`，并给出机器原因码：`benchmark_series_missing`（本地无指数序列）、`benchmark_window_not_covered`（起点或终点落在指数覆盖范围之外）、`pick_untrackable`（入选自身不可复盘）、`benchmark_disabled`（功能关闭）。收益数字也绝不替代：`benchmark_comparable` / `beat_benchmark_denominator` 只统计"有可复盘收益且窗口被指数覆盖"的入选，`beat_benchmark_basis` 写明分母口径（`benchmark_comparable_trackable_picks` 或 `no_comparable_picks`）。`benchmark.window_basis` 恒为 `per_pick_window`。
 
 **指数数据怎么来。** `src/services/benchmark_index_service.py` 用 `ak.stock_zh_index_daily` 抓取沪深300 `sh000300`（默认还含中证500 `sh000905`、中证1000 `sh000852`，列表顺序即优先级），截取最近 800 个自然日后写入既有 `stock_daily`。指数行用**显式指数形式**作 `code`（`sh000300` 而非裸码 `000300`，裸码会被 canonical_id 推导当成个股）、`canonical_id` 由 `_derive_canonical_id` 推导、`data_source='akshare_index'` 标记；两个 `canonical_id` 自愈迁移都只处理裸码与 `canonical_id IS NULL` 的行，因此不会改写指数行。指数代码**不进入** `_tracked_daily_codes`（那条清单按个股口径抓取并打个股来源），而是由行情刷新任务在同一轮的 `finally` 中调用独立同步，fail-open 到单个指数粒度。配置见 `.env.example` 的 `SCREENING_PICK_TRACKING_*` 与 `SCREENING_BENCHMARK_INDEX_*`。
+
+## 选股明细落库与每日快照
+
+复盘接口是**只读现算**的（不落表）。下游「选股结果 → 回测」要的是稳定的表 + 文件接口，所以另有这一层。
+
+**表 `screening_picks`**（`src/storage.py`）。唯一键 `uq_screening_pick_key = (pick_date, strategy, code)`：同一策略同一天可能跑多次、同一只票会重复出现（实测 151 条候选里 **30 条**重复），按条统计会把胜率算歪，所以收敛成一行，并保留**最近一次运行**的那条（比较 `screening_runs.created_at`；注意它经裸 SQL 读出是**字符串**而不是 datetime，必须归一化后再比，否则去重会退化成"最后出现者胜"= 留下最旧那次运行）。
+
+| 字段 | 语义 |
+|---|---|
+| `pick_date` / `strategy` / `code` | 唯一键三件套 |
+| `pick_price` | 选股时点快照价（仅作对照，**不是**可成交价） |
+| **`buy_price`** | **买入价(实际) = 入选日之后第一个交易日的开盘价**（`buy_basis=next_open`）；开盘缺失时退该根 K 线的收盘价并记 `next_close`；拿不到前瞻 K 线则留 `NULL`，绝不回退成快照价。一旦补齐不会被后续物化清空 |
+| `buy_date` | 那个交易日的日期 |
+| `created_at` | **首次写入时间**，增量抓"新入选"用它 |
+| `updated_at` | **有实质变化才更新**（例如次日补上买入价），增量抓"后补"用它 |
+
+> ⚠️ 两个时间戳都是 **UTC naive**。只给 `created_at` 的话，后补的买入价永远读不到；若每次物化都刷新 `updated_at`，当天快照会"每次都内容不同"、"不覆盖历史"的语义也随之失效。
+
+**每日快照**。`screening-YYYYMMDD.csv`，默认目录 `data/screening-snapshots/`（`SCREENING_SNAPSHOT_DIR` 可覆盖；`data/` 已在 `.gitignore` 内）：
+
+- **只写当天那一份**：代码里不按通配符删除或改写其它日期的文件 —— 这就是"不覆盖历史"。
+- 当天文件**幂等重写**（买入价要等下一个交易日才补得齐）；重写前把旧版本归档成 `screening-YYYYMMDD.previous.csv`（只留一份）。数据没变时 `rewritten=false`、不产生归档。
+- 列顺序即契约：`pick_date, strategy, market, code, name, pick_price, buy_price, buy_date, buy_basis, score, run_id, created_at, updated_at`。
+
+**命令行入口**（都不需要 Web 服务在跑）：
+
+```bash
+# 物化 + 导出今天
+.venv/bin/python scripts/export_screening_picks.py
+# 导出指定日期（仍会先物化窗口内数据）
+.venv/bin/python scripts/export_screening_picks.py --date 2026-10-16
+# 手动触发一次选股，跑完顺手物化 + 导快照
+.venv/bin/python scripts/run_screening_once.py --strategy dual_low --with-export
+```
+
+选股定时任务跑完后会自动物化 + 导出当日快照（见下节）。
+
+## 选股定时
+
+按墙钟时间每天自动跑一次选股，**独立于 `SCHEDULE_ENABLED`**：每日分析关着时它照样能按点跑（调度线程只在"每日任务与后台任务都为空"时才不启动）。
+
+配置（三个键缺一不可，缺任一个都不注册任务 —— 宁可什么都不跑，也不要"开了一半"就把全策略跑满）：
+
+```bash
+SCREENING_SCHEDULE_ENABLED=true
+SCREENING_SCHEDULE_TIMES=15:20              # 逗号分隔 HH:MM；非法项直接丢弃，不回退默认
+SCREENING_SCHEDULE_STRATEGIES=dual_low,quality_value
+SCREENING_SCHEDULE_MARKET=cn
+SCREENING_SCHEDULE_MAX_RESULTS=5
+SCREENING_SCHEDULE_WEEKDAYS_ONLY=true
+```
+
+**实现方式与两个边界。** 背景任务框架只有 interval 语义，所以时间判断自己做（`src/services/runtime_scheduler.py`）：
+
+1. 任务以 **60 秒**为 tick 注册，每次 tick 取"**已经到点的时间点里最晚的那个**"作为本轮目标，而不是"必须在 HH:MM 这一分钟命中"。这样即使某次 tick 被跳过（上一轮跑得久），也不会漏掉当天任务。
+2. **当日去重查库**（`screening_runs` 里这个策略在目标时间之后是否已有记录），不是内存标记：进程重启不会重复跑，也不会因为重启误判成"今天还没跑"。
+3. 到点后 **120 分钟内**允许补跑一次；超过就不再补（避免深夜或隔天才跑出一份过期结果）。
+4. `SCREENING_SCHEDULE_WEEKDAYS_ONLY=true`（默认）跳过周六周日。
+5. 单个策略抛异常只记日志，不拖垮同一轮的其他策略，也不会让定时任务永久死掉。
+
+> ⚠️ **成本与耗时**：一次选股（单策略 + 3 只深度分析）实测约 **13 分钟**、并触发多次 LLM 调用。策略列表越长，串行耗时线性增长（7 个策略 ≈ 90 分钟），排时间点时要留够余量。
 
 ## 核心流程
 

@@ -155,6 +155,30 @@ def _has_gotify_base_url(value: Optional[str]) -> bool:
     return not (path_segments and path_segments[-1].lower() == "message")
 
 
+def parse_hhmm_list(value: Optional[str]) -> List[str]:
+    """解析逗号分隔的 HH:MM 列表。
+
+    非法项直接丢弃而不是回退到默认时间：定时配置打错字时宁可"不跑"，
+    也不要悄悄按一个用户没写过的时间跑起来。空输入返回空列表（=不启用）。
+    """
+    if not value:
+        return []
+    items = {item.strip() for item in str(value).split(",") if item.strip()}
+    return sorted(item for item in items if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", item))
+
+
+def parse_csv_values(value: Optional[str]) -> List[str]:
+    """解析逗号分隔的字符串列表，去空去重且保持出现顺序。"""
+    if not value:
+        return []
+    ordered: List[str] = []
+    for item in str(value).split(","):
+        candidate = item.strip()
+        if candidate and candidate not in ordered:
+            ordered.append(candidate)
+    return ordered
+
+
 def normalize_tickflow_kline_adjust(value: Optional[str]) -> str:
     """Normalize TickFlow daily K-line adjustment mode."""
     normalized = (value or "none").strip().lower()
@@ -910,6 +934,18 @@ class Config:
     screening_intelligence_context_max_chars: int = 800
     screening_intelligence_context_days: int = 7
     screening_intelligence_context_candidate_limit: int = 3
+    # 选股定时：独立于 SCHEDULE_ENABLED 的背景任务 —— 每日分析关着时也能按点跑
+    # （调度线程只在"每日任务与后台任务都为空"时才不启动）。
+    # times 为空 = 不启用；策略列表为空 = 什么都不跑（避免误开就跑满全策略）。
+    screening_schedule_enabled: bool = False
+    screening_schedule_times: List[str] = field(default_factory=list)
+    screening_schedule_strategies: List[str] = field(default_factory=list)
+    screening_schedule_market: str = "cn"
+    screening_schedule_max_results: int = 5
+    screening_schedule_weekdays_only: bool = True
+    # 选股快照目录（每日一份 screening-YYYYMMDD.csv，不覆盖历史）。
+    # 留空 = data/screening-snapshots（在 .gitignore 内，历史快照不进版本库）。
+    screening_snapshot_dir: str = ""
 
     # === AI 分析配置 ===
     generation_backend: str = LITELLM_BACKEND_ID
@@ -2437,6 +2473,18 @@ class Config:
             screening_intelligence_context_candidate_limit=parse_env_int(
                 os.getenv('SCREENING_INTELLIGENCE_CONTEXT_CANDIDATE_LIMIT'), 3,
                 field_name='SCREENING_INTELLIGENCE_CONTEXT_CANDIDATE_LIMIT', minimum=1),
+            screening_schedule_enabled=parse_env_bool(
+                os.getenv('SCREENING_SCHEDULE_ENABLED'), default=False),
+            screening_schedule_times=parse_hhmm_list(os.getenv('SCREENING_SCHEDULE_TIMES')),
+            screening_schedule_strategies=parse_csv_values(
+                os.getenv('SCREENING_SCHEDULE_STRATEGIES')),
+            screening_schedule_market=(os.getenv('SCREENING_SCHEDULE_MARKET') or 'cn').strip().lower() or 'cn',
+            screening_schedule_max_results=parse_env_int(
+                os.getenv('SCREENING_SCHEDULE_MAX_RESULTS'), 5,
+                field_name='SCREENING_SCHEDULE_MAX_RESULTS', minimum=1, maximum=50),
+            screening_schedule_weekdays_only=parse_env_bool(
+                os.getenv('SCREENING_SCHEDULE_WEEKDAYS_ONLY'), default=True),
+            screening_snapshot_dir=(os.getenv('SCREENING_SNAPSHOT_DIR') or '').strip(),
         )
     
     @classmethod

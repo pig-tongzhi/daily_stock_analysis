@@ -427,6 +427,48 @@ class ScreeningRun(Base):
     )
 
 
+class ScreeningPick(Base):
+    """选股入选的规范化明细：下游「选股结果 → 回测」的唯一接口。
+
+    为什么不直接让下游去解析 ``screening_runs.result_json``：
+
+    1. **唯一键**：同一策略同一天可能跑多次，同一只票会重复出现（实测 133 条
+       候选里 36 条 ``(入选日期, 策略, 代码)`` 重复）。按条统计会把胜率算歪，
+       所以这里用 ``uq_screening_pick_key`` 收敛成一行。
+    2. **买入价(实际)**：快照价多数是"信号所用当天的收盘价"，现实中回不到过去
+       成交；可执行价格是**入选日之后第一个交易日的开盘价**（开盘缺失时退该根
+       K 线的收盘价，并在 ``buy_basis`` 里标明）。它依赖 ``stock_daily``，
+       放在表里才能被一次性补齐、并被独立核对。
+    3. **增量取数**：``created_at``（首次写入时间）用于抓"新入选"；
+       ``updated_at`` 用于抓"买入价后补"等更新 —— 两者都不改历史语义。
+    """
+
+    __tablename__ = 'screening_picks'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pick_date = Column(Date, nullable=False, index=True)
+    strategy = Column(String(64), nullable=False, index=True)
+    code = Column(String(16), nullable=False, index=True)
+    name = Column(String(64))
+    market = Column(String(16), nullable=False, default='cn')
+    # 最近一次覆盖这一行的运行（同一唯一键可能被多次运行覆盖）。
+    run_id = Column(String(64), index=True)
+    pick_price = Column(Float)
+    # 买入价(实际)=入选日之后第一个交易日的开盘价；拿不到就是 NULL，绝不填快照价。
+    buy_price = Column(Float)
+    buy_date = Column(Date)
+    buy_basis = Column(String(16))
+    score = Column(Float)
+    created_at = Column(DateTime, default=utc_naive_now, nullable=False, index=True)
+    updated_at = Column(DateTime, default=utc_naive_now, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint('pick_date', 'strategy', 'code', name='uq_screening_pick_key'),
+        Index('ix_screening_pick_updated', 'updated_at'),
+        Index('ix_screening_pick_strategy_date', 'strategy', 'pick_date'),
+    )
+
+
 class AnalysisHistory(Base):
     """
     分析结果历史记录模型

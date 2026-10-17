@@ -54,6 +54,19 @@ _INDEX_CANONICAL_PATTERN = re.compile(r"^(sh000\d{3}|sz399\d{3}|sh950\d{3})$")
 # 单次查询最多回看多少次选股运行。窗口过滤在 Python 侧做（见 _load_pick_rows）。
 _MAX_RUNS_SCAN = 2000
 
+# 固定持有期回测档位（交易日）。
+#
+# 为什么单独做一套固定持有期：``return_pct`` 的右端点是"最新一根前瞻 K 线"，
+# 每条入选的持有天数因此各不相同（实测平均 6.9 天），既不能横向比较，也无法
+# 回答"这个策略该拿几天"。
+#
+# 入场口径是**入选日之后第一个交易日的开盘价**，不是选股快照价：
+# 快照价多数等于"信号所用那一天的收盘价"，现实中回不到过去成交；而周末/假期
+# 跑出来的信号与可下单时点之间还会隔好几天。用次日开盘既可执行，也顺带消掉了
+# 这段跨日错配。
+FIXED_HORIZONS: Tuple[int, ...] = (1, 3, 5, 10)
+FIXED_ENTRY_BASIS = "next_open"
+
 
 def _coerce_float(value: Any) -> Optional[float]:
     """把价格类字段转成 float；空值/占位符一律 None，不塞 0。
@@ -255,6 +268,10 @@ def load_pick_rows(
                     "name": str(candidate.get("name") or "").strip(),
                     "pick_price": _coerce_float(candidate.get("price")),
                     "score": _coerce_float(candidate.get("score")),
+                    # 运行写入时间：下游按 (日期,策略,代码) 去重时用它判定"哪次运行更新"。
+                    # 必须带上 —— _fetch_recent_run_rows 是 created_at DESC 返回的，
+                    # 只按出现顺序取"最后一条"会留下最旧的那次运行。
+                    "run_created_at": run["created_at"],
                 }
             )
     return picks, malformed
@@ -322,7 +339,7 @@ def _fetch_forward_bars(
         with db_manager.get_session() as session:
             rows = session.execute(
                 text(
-                    "SELECT id, canonical_id, date, close, high, low FROM stock_daily "
+                    "SELECT id, canonical_id, date, open, close, high, low FROM stock_daily "
                     "WHERE canonical_id IN ("
                     + ",".join(f":id{index}" for index in range(len(chunk)))
                     + ")"
@@ -340,6 +357,7 @@ def _fetch_forward_bars(
                 {
                     "id": int(mapping["id"] or 0),
                     "date": bar_date,
+                    "open": _coerce_float(mapping["open"]),
                     "close": _coerce_float(mapping["close"]),
                     "high": _coerce_float(mapping["high"]),
                     "low": _coerce_float(mapping["low"]),
@@ -387,7 +405,14 @@ def _compute_pick_performance(
         "max_drawdown_pct": None,
         "days_held": None,
         "forward_bars": 0,
+        # === 固定持有期回测（可执行口径：入选后第一个交易日开盘价入场）===
+        # 每个档位独立；前瞻 K 线不够长就保持 None —— 不拉长窗口、不填 0。
+        "entry_price": None,
+        "entry_date": None,
+        "entry_basis": None,
     }
+    for _horizon in FIXED_HORIZONS:
+        base[f"t{_horizon}_return_pct"] = None
 
     if canonical_id is None:
         base["reason"] = UNTRACKABLE_UNKNOWN_IDENTITY
@@ -429,6 +454,31 @@ def _compute_pick_performance(
             "forward_bars": len(forward),
         }
     )
+
+    # === 固定持有期回测 ===
+    # 入场 = 入选日之后第一个交易日的开盘价（可执行口径），出场 = 第 N 个交易日收盘。
+    # 前瞻 K 线不足 N 根时该档位保持 None：宁可缺一个数字，也不缩短窗口凑出来。
+    entry_bar = forward[0]
+    entry_price = entry_bar.get("open")
+    if entry_price is None or entry_price <= 0:
+        # 开盘价缺失时退到同一根 K 线的收盘价（仍是真实成交价），但如实标出用的是哪种。
+        entry_price = entry_bar.get("close")
+        base["entry_basis"] = "next_close"
+    else:
+        base["entry_basis"] = FIXED_ENTRY_BASIS
+    if entry_price is not None and entry_price > 0:
+        entry_price = float(entry_price)
+        base["entry_price"] = _round(entry_price, 4)
+        base["entry_date"] = entry_bar["date"].isoformat()
+        for horizon in FIXED_HORIZONS:
+            if len(forward) < horizon:
+                continue
+            exit_close = forward[horizon - 1].get("close")
+            if exit_close is None:
+                continue
+            base[f"t{horizon}_return_pct"] = _round(
+                (float(exit_close) - entry_price) / entry_price * 100.0
+            )
     return base
 
 
@@ -549,6 +599,33 @@ def _aggregate(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         if reason:
             benchmark_reason_counts[reason] = benchmark_reason_counts.get(reason, 0) + 1
 
+    # === 固定持有期汇总 ===
+    # 每个档位的分母是"真正有 N 根前瞻 K 线"的入选，不是全部可复盘入选：
+    # 否则 T+10 的胜率会混进只持有 5 天就结算的样本，看着像 10 天的结论。
+    horizon_stats: Dict[str, Dict[str, Any]] = {}
+    for horizon in FIXED_HORIZONS:
+        key = f"t{horizon}_return_pct"
+        values = [row[key] for row in trackable if row.get(key) is not None]
+        if not values:
+            horizon_stats[f"t{horizon}"] = {
+                "n": 0,
+                "win": 0,
+                "win_rate": None,
+                "avg_return_pct": None,
+                "median_return_pct": None,
+                "worst_return_pct": None,
+            }
+            continue
+        wins = [value for value in values if value > 0]
+        horizon_stats[f"t{horizon}"] = {
+            "n": len(values),
+            "win": len(wins),
+            "win_rate": _round(len(wins) / len(values), 4),
+            "avg_return_pct": _round(sum(values) / len(values)),
+            "median_return_pct": _round(median(values)),
+            "worst_return_pct": _round(min(values)),
+        }
+
     aggregate: Dict[str, Any] = {
         "picks": len(rows),
         "trackable": len(trackable),
@@ -560,6 +637,9 @@ def _aggregate(rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         "best_return_pct": _round(max(returns)) if returns else None,
         "worst_return_pct": _round(min(returns)) if returns else None,
         "avg_days_held": _round(sum(days) / len(days), 1) if days else None,
+        # === 固定持有期（T+1 / T+3 / T+5 / T+10，次日开盘入场）===
+        "horizons": horizon_stats,
+        "horizon_entry_basis": FIXED_ENTRY_BASIS,
         # === 同期基准对比（每只入选用自己的窗口）===
         "benchmark_code": next(
             (row.get("benchmark_code") for row in rows if row.get("benchmark_code")), None
@@ -806,12 +886,21 @@ class ScreeningTrackingService:
                 "pick_forward_bars_available": bool(latest_dates),
             },
             "benchmark": benchmark_probe,
+            # 固定持有期回测的口径元数据：档位与入场基准都显式给出，
+            # 前端/下游不需要猜"T+5 是从哪天买、买到哪天"。
+            "horizons": {
+                "windows": list(FIXED_HORIZONS),
+                "entry_basis": FIXED_ENTRY_BASIS,
+                "entry_rule": "入选日之后第一个交易日的开盘价",
+                "exit_rule": "第 N 个交易日的收盘价",
+            },
             "notes": [
                 "return_pct = 最新收盘价相对选股时点价格的涨跌幅；取不到前瞻 K 线的入选计入 untrackable，不计入命中率分母。",
                 "同一交易日的 K 线不算前瞻收益（选股价格已是当日快照价）。",
                 "stock_daily 需要先刷新：STOCK_DAILY_REFRESH_ENABLED 打开后，刷新清单会覆盖最近选股入选。",
                 "excess_return_pct = 该入选自己的 return_pct 减去同期基准指数收益；基准区间随每只入选的窗口走（入选日 → 该入选最新前瞻 K 线日），不是全局统一的一个区间。",
                 "跑赢比例的分母只有 benchmark_comparable（既有可复盘收益、窗口又被指数覆盖的入选）；拿不到基准的入选单列 benchmark_reason，绝不按 0 超额计入。",
+                "t1/t3/t5/t10_return_pct = 固定持有期收益：入场用入选日之后第一个交易日的开盘价（可执行口径，不用选股快照价，因为那通常是信号所用当天的收盘价、现实中回不到过去成交），出场用第 N 个交易日的收盘价；前瞻 K 线不足 N 根的入选在该档位为 null，每个档位的分母因此在 horizons[tN].n 里单独给出。",
             ],
         }
 

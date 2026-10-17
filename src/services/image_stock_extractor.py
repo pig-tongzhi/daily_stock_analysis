@@ -254,6 +254,10 @@ def _get_api_keys_for_model(model: str, cfg: Config) -> List[str]:
         return [k for k in cfg.gemini_api_keys if k and len(k) >= 8]
     if model.startswith("anthropic/"):
         return [k for k in cfg.anthropic_api_keys if k and len(k) >= 8]
+    if model.startswith("deepseek/"):
+        # DeepSeek 的 chat 模型本身支持图片输入；缺这一支会让已配置的
+        # DEEPSEEK_API_KEY 取不到，视觉调用直接报 "No API key found"。
+        return [k for k in cfg.deepseek_api_keys if k and len(k) >= 8]
     return [k for k in cfg.openai_api_keys if k and len(k) >= 8]
 
 

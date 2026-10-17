@@ -590,6 +590,156 @@ def build_stock_daily_refresh_background_tasks(
     }]
 
 
+# 到点后允许补跑的分钟数：进程在到点时正好没运行（重启/长任务占用）时，
+# 仍在这一窗口内补跑一次；超过就不再补，避免深夜或隔天才跑出一份过期结果。
+_SCREENING_SCHEDULE_CATCH_UP_MINUTES = 120
+
+
+def _screening_ran_since(strategy: str, since: datetime) -> bool:
+    """该策略是否已在 ``since`` 之后跑过。
+
+    用库里的 ``screening_runs`` 而不是内存标记：进程重启后不会重复跑，
+    也不会因为重启而误判成"今天还没跑"。
+    """
+    from sqlalchemy import text
+
+    from src.storage import DatabaseManager
+
+    db = DatabaseManager.get_instance()
+    with db.get_session() as session:
+        count = session.execute(
+            text(
+                "SELECT COUNT(*) FROM screening_runs "
+                "WHERE strategy = :strategy AND created_at >= :since"
+            ),
+            {"strategy": strategy, "since": since},
+        ).scalar()
+    return bool(count)
+
+
+def _materialize_and_export_screening_picks(config: Config) -> None:
+    """选股之后物化明细并导出当日快照；失败只记日志，不能拖垮定时任务。"""
+    try:
+        from src.services.screening_pick_export_service import (
+            export_daily_snapshot,
+            materialize_screening_picks,
+        )
+
+        materialized = materialize_screening_picks(config=config)
+        snapshot = export_daily_snapshot(config=config)
+        logger.info(
+            "[ScreeningSchedule] 明细物化 deduped=%s duplicates=%s with_buy_price=%s；"
+            "快照 %s（%s 行，重写=%s）",
+            materialized.get("deduped"),
+            materialized.get("duplicates"),
+            materialized.get("with_buy_price"),
+            snapshot.get("path"),
+            snapshot.get("rows"),
+            snapshot.get("rewritten"),
+        )
+    except Exception:
+        logger.exception("[ScreeningSchedule] 物化/导出选股明细失败")
+
+
+def _run_screening_schedule_tick(config: Config) -> None:
+    """到点就跑：取"已到点的时间点里最晚的那个"，逐个策略查库去重后运行。"""
+    times = sorted(
+        str(value) for value in (getattr(config, "screening_schedule_times", None) or [])
+    )
+    strategies = list(getattr(config, "screening_schedule_strategies", None) or [])
+    if not times or not strategies:
+        return
+    now = datetime.now()
+    if bool(getattr(config, "screening_schedule_weekdays_only", True)) and now.weekday() >= 5:
+        return
+    # 用"已到点"而不是"正好等于这一分钟"：某次 tick 被跳过时不会漏掉当天任务。
+    due = [value for value in times if value <= now.strftime("%H:%M")]
+    if not due:
+        return
+    target = max(due)
+    since = now.replace(
+        hour=int(target[:2]), minute=int(target[3:]), second=0, microsecond=0
+    )
+    if (now - since).total_seconds() > _SCREENING_SCHEDULE_CATCH_UP_MINUTES * 60:
+        logger.info(
+            "[ScreeningSchedule] %s 已过补跑窗口（%s 分钟），本轮不再补跑",
+            target,
+            _SCREENING_SCHEDULE_CATCH_UP_MINUTES,
+        )
+        return
+
+    market = str(getattr(config, "screening_schedule_market", "cn") or "cn")
+    max_results = int(getattr(config, "screening_schedule_max_results", 5) or 5)
+
+    from src.services.screening_service import ScreeningService
+
+    ran_any = False
+    for strategy in strategies:
+        if _screening_ran_since(strategy, since):
+            continue
+        try:
+            result = ScreeningService(config=config).screen(
+                strategy=strategy, market=market, max_results=max_results
+            )
+            ran_any = True
+            logger.info(
+                "[ScreeningSchedule] strategy=%s market=%s run_id=%s candidates=%s",
+                strategy,
+                market,
+                result.get("run_id"),
+                result.get("candidate_count"),
+            )
+        except Exception:
+            # 单个策略失败不能拖垮其余策略，也不能让定时任务永久死掉。
+            logger.exception("[ScreeningSchedule] strategy=%s failed", strategy)
+
+    if ran_any:
+        # 跑完立刻物化 + 导当日快照：下游要的就是这份 append-only 文件。
+        _materialize_and_export_screening_picks(config)
+
+
+def build_screening_schedule_background_tasks(
+    config: Config,
+    *,
+    config_provider: Callable[[], Config],
+) -> List[Dict[str, Any]]:
+    """按配置的墙钟时间每天跑一次选股。
+
+    背景任务框架只有 interval 语义，所以"每天 15:20"要自己做：每分钟 tick
+    一次，由 :func:`_run_screening_schedule_tick` 判时间并查库去重。
+
+    与 ``SCHEDULE_ENABLED`` 解耦：每日分析关着时选股照样能按点跑（调度线程
+    只在"每日任务与后台任务都为空"时才不启动）。
+    """
+    if not getattr(config, "screening_schedule_enabled", False):
+        return []
+    if not (getattr(config, "screening_schedule_times", None) or []):
+        logger.warning(
+            "[ScreeningSchedule] 已启用但没有配置 SCREENING_SCHEDULE_TIMES，跳过注册"
+        )
+        return []
+    if not (getattr(config, "screening_schedule_strategies", None) or []):
+        logger.warning(
+            "[ScreeningSchedule] 已启用但 SCREENING_SCHEDULE_STRATEGIES 为空，跳过注册"
+        )
+        return []
+
+    def schedule_task() -> None:
+        try:
+            current = config_provider() if callable(config_provider) else config
+            _run_screening_schedule_tick(current)
+        except Exception:
+            logger.exception("[ScreeningSchedule] scheduled run failed")
+
+    return [{
+        "task": schedule_task,
+        # 每分钟检查一次：到点后最多 60 秒内触发。
+        "interval_seconds": 60,
+        "run_immediately": False,
+        "name": "screening_schedule",
+    }]
+
+
 class RuntimeSchedulerService:
     """Manage scheduled analysis inside the current API/Web/Desktop process."""
 
@@ -970,14 +1120,15 @@ class RuntimeSchedulerService:
     def _current_background_tasks(self, config: Config) -> List[Dict[str, Any]]:
         if self._background_tasks_provider is not None:
             return self._background_tasks_provider(config)
-        # 四个后台任务并列注册：事件监控、到期验证、行情刷新、资讯抓取
-        # 互不依赖，各自独立开关。
+        # 后台任务并列注册：事件监控、到期验证、行情刷新、资讯抓取、公司档案、
+        # 选股定时。互不依赖，各自独立开关。
         return [
             *self._current_agent_event_monitor_background_tasks(config),
             *self._current_decision_signal_outcome_background_tasks(config),
             *self._current_stock_daily_refresh_background_tasks(config),
             *self._current_news_intel_fetch_background_tasks(config),
             *self._current_company_profile_refresh_background_tasks(config),
+            *self._current_screening_schedule_background_tasks(config),
         ]
 
     def _current_company_profile_refresh_background_tasks(
@@ -1077,6 +1228,38 @@ class RuntimeSchedulerService:
             "task": cached["task"],
             "interval_seconds": interval_seconds,
             "run_immediately": run_immediately,
+            "name": name,
+        }]
+
+    def _current_screening_schedule_background_tasks(
+        self, config: Config
+    ) -> List[Dict[str, Any]]:
+        name = "screening_schedule"
+        if not getattr(config, "screening_schedule_enabled", False):
+            self._background_task_cache.pop(name, None)
+            self._background_task_registered_names.discard(name)
+            return []
+
+        cached = self._background_task_cache.get(name)
+        if cached is None:
+            entries = build_screening_schedule_background_tasks(
+                config,
+                config_provider=self._reload_config,
+            )
+            if not entries:
+                self._background_task_cache.pop(name, None)
+                self._background_task_registered_names.discard(name)
+                return []
+            cached = dict(entries[0])
+            cached["name"] = name
+            self._background_task_cache[name] = cached
+
+        self._background_task_registered_names.add(name)
+        return [{
+            "task": cached["task"],
+            # 固定 60 秒 tick：时间判断与去重都在 _run_screening_schedule_tick 里。
+            "interval_seconds": int(cached["interval_seconds"]),
+            "run_immediately": bool(cached.get("run_immediately", False)),
             "name": name,
         }]
 

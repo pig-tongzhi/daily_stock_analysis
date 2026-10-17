@@ -44,17 +44,30 @@ def _insert_run(
         )
 
 
-def _insert_bar(db, *, code: str, canonical_id: str, day: date, close: float, high=None, low=None) -> None:
+def _insert_bar(
+    db,
+    *,
+    code: str,
+    canonical_id: str,
+    day: date,
+    close: float,
+    high=None,
+    low=None,
+    open_price=None,
+) -> None:
     with db._engine.begin() as conn:
         conn.execute(
             text(
-                "INSERT INTO stock_daily (code, canonical_id, date, close, high, low) "
-                "VALUES (:code, :canonical_id, :date, :close, :high, :low)"
+                "INSERT INTO stock_daily (code, canonical_id, date, open, close, high, low) "
+                "VALUES (:code, :canonical_id, :date, :open, :close, :high, :low)"
             ),
             {
                 "code": code,
                 "canonical_id": canonical_id,
                 "date": day,
+                # 未显式给开盘价时退到收盘价：既有用例不关心开盘价，
+                # 固定持有期用例必须显式给，否则测不出"次日开盘入场"。
+                "open": open_price if open_price is not None else close,
                 "close": close,
                 "high": high if high is not None else close,
                 "low": low if low is not None else close,
@@ -872,4 +885,123 @@ class TestBenchmarkIndexIngestion:
         tasks[0]["task"]()
 
         assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# 固定持有期回测（T+1 / T+3 / T+5 / T+10，次日开盘入场）
+# ---------------------------------------------------------------------------
+
+
+def test_fixed_horizon_returns_use_next_open_entry(tracking_db):
+    """固定持有期必须与 return_pct 是两套数字：入场是次日开盘，不是选股快照价。"""
+    from src.services.screening_tracking_service import ScreeningTrackingService
+
+    _insert_run(
+        tracking_db,
+        run_id="run-fixed-horizon",
+        created_at=datetime(2026, 10, 7, 23, 30, tzinfo=timezone.utc),
+        result_json=_candidate_json("601166", "兴业银行", 9.00),
+    )
+    # 5 根前瞻 K 线；开盘价刻意与快照价 9.00 拉开，才能区分两套口径。
+    for day, open_price, close in (
+        (date(2026, 10, 8), 10.00, 10.50),
+        (date(2026, 10, 9), 10.60, 11.00),
+        (date(2026, 10, 12), 11.10, 11.50),
+        (date(2026, 10, 13), 11.60, 12.00),
+        (date(2026, 10, 14), 12.10, 12.50),
+    ):
+        _insert_bar(
+            tracking_db,
+            code="601166",
+            canonical_id="sh601166",
+            day=day,
+            close=close,
+            open_price=open_price,
+        )
+
+    out = ScreeningTrackingService(config=None, db_manager=tracking_db).tracking()
+    pick = out["picks"][0]
+
+    # 现口径：选股快照价 9.00 → 最新收盘 12.50
+    assert pick["return_pct"] == pytest.approx(38.89, abs=0.01)
+    # 固定持有期：入场 = 10-08 开盘 10.00
+    assert pick["entry_basis"] == "next_open"
+    assert pick["entry_price"] == pytest.approx(10.00)
+    assert pick["entry_date"] == "2026-10-08"
+    assert pick["t1_return_pct"] == pytest.approx(5.00)   # 10.50
+    assert pick["t3_return_pct"] == pytest.approx(15.00)  # 11.50
+    assert pick["t5_return_pct"] == pytest.approx(25.00)  # 12.50
+    assert pick["t10_return_pct"] is None  # 只有 5 根前瞻 K 线
+
+    # 每个档位的分母必须单独给出，不能拿"可复盘总数"冒充
+    total = out["total"]
+    assert total["horizons"]["t1"]["n"] == 1
+    assert total["horizons"]["t5"]["win_rate"] == pytest.approx(1.0)
+    assert total["horizons"]["t10"]["n"] == 0
+    assert total["horizons"]["t10"]["win_rate"] is None
+    assert total["horizon_entry_basis"] == "next_open"
+    assert out["horizons"]["windows"] == [1, 3, 5, 10]
+
+
+def test_fixed_horizon_is_null_when_forward_bars_are_short(tracking_db):
+    """前瞻 K 线不足 N 根：该档位必须是 null，绝不缩短窗口凑出一个数字。"""
+    from src.services.screening_tracking_service import ScreeningTrackingService
+
+    _insert_run(
+        tracking_db,
+        run_id="run-short-forward",
+        strategy="dual_low",
+        created_at=datetime(2026, 10, 7, 23, 30, tzinfo=timezone.utc),
+        result_json=_candidate_json("600016", "民生银行", 3.50),
+    )
+    # 只有 1 根前瞻 K 线
+    _insert_bar(
+        tracking_db,
+        code="600016",
+        canonical_id="sh600016",
+        day=date(2026, 10, 8),
+        close=3.60,
+        open_price=3.55,
+    )
+
+    out = ScreeningTrackingService(config=None, db_manager=tracking_db).tracking()
+    pick = out["picks"][0]
+
+    assert pick["t1_return_pct"] == pytest.approx(1.41, abs=0.01)  # (3.60-3.55)/3.55
+    assert pick["t3_return_pct"] is None
+    assert pick["t5_return_pct"] is None
+    assert pick["t10_return_pct"] is None
+
+    # 整体与分策略两处都要给出同一个口径
+    assert out["total"]["horizons"]["t1"]["n"] == 1
+    assert out["total"]["horizons"]["t3"]["n"] == 0
+    strategy_row = next(row for row in out["strategies"] if row["strategy"] == "dual_low")
+    assert strategy_row["horizons"]["t1"]["n"] == 1
+    assert strategy_row["horizons"]["t5"]["win_rate"] is None
+
+
+def test_fixed_horizon_falls_back_to_close_when_open_missing(tracking_db):
+    """开盘价缺失时退到同一根 K 线的收盘价，并在 entry_basis 里如实标注。"""
+    from src.services.screening_tracking_service import ScreeningTrackingService
+
+    _insert_run(
+        tracking_db,
+        run_id="run-no-open",
+        created_at=datetime(2026, 10, 7, 23, 30, tzinfo=timezone.utc),
+        result_json=_candidate_json("600519", "贵州茅台", 1200.00),
+    )
+    with tracking_db._engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO stock_daily (code, canonical_id, date, open, close, high, low) "
+                "VALUES ('600519', 'sh600519', '2026-10-08', NULL, 1250.00, 1260.00, 1240.00)"
+            )
+        )
+
+    out = ScreeningTrackingService(config=None, db_manager=tracking_db).tracking()
+    pick = out["picks"][0]
+
+    assert pick["entry_basis"] == "next_close"
+    assert pick["entry_price"] == pytest.approx(1250.00)
+    assert pick["t1_return_pct"] == pytest.approx(0.00)
 
