@@ -128,6 +128,41 @@ def test_tick_runs_each_strategy_once_when_due(monkeypatch, memory_db):
     assert calls == [("dual_low", "cn", 5), ("quality_value", "cn", 5)]
 
 
+def test_tick_injects_db_manager_into_screening_service(monkeypatch, memory_db):
+    """回归：调用点必须把 db_manager 传进 ScreeningService。
+
+    历史 bug：``ScreeningService(config=config)`` 漏传 db_manager →
+    ``screen()`` 末尾 ``if self.db_manager is not None`` 静默跳过
+    ``save_screening_run`` → ``screening_runs`` 长期没有当日行 →
+    去重判断失效（每轮重复跑）→ 当日快照永远只有表头。
+
+    这条测试不看"调了哪些策略"，只看"有没有把库接上" ——
+    正是原先缺失的那一环（storage 单测 + fake service 都覆盖不到）。
+    """
+    captured = []
+
+    class _ProbeService:
+        def __init__(self, config=None, db_manager=None):  # noqa: D107
+            captured.append(db_manager)
+
+        def screen(self, *, strategy, market, max_results):  # noqa: D102
+            return {"run_id": f"probe-{strategy}", "candidate_count": 1}
+
+    monkeypatch.setattr(
+        "src.services.screening_service.ScreeningService",
+        _ProbeService,
+        raising=True,
+    )
+    _freeze(monkeypatch, datetime(2026, 10, 16, 15, 20, 30))
+
+    runtime_scheduler._run_screening_schedule_tick(_config())
+
+    assert len(captured) == 2, "两个策略都应被执行"
+    assert all(db is not None for db in captured), (
+        "db_manager 必须注入，否则选股运行结果不会落库（screening_runs 空 → 去重失效）"
+    )
+
+
 def test_tick_skips_strategy_already_run_today(monkeypatch, memory_db):
     """当天已经跑过的策略不重复跑 —— 去重看的是库里的 screening_runs。"""
     calls = _capture_screen(monkeypatch)

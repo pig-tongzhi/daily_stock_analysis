@@ -672,13 +672,20 @@ def _run_screening_schedule_tick(config: Config) -> None:
     max_results = int(getattr(config, "screening_schedule_max_results", 5) or 5)
 
     from src.services.screening_service import ScreeningService
+    from src.storage import DatabaseManager
+
+    # 必须注入 db_manager：不注入时 ScreeningService.screen() 末尾的
+    # ``if self.db_manager is not None`` 会静默跳过 save_screening_run，
+    # 导致定时任务的选股结果从不落库（screening_runs 无当日行 →
+    # 去重判断失效 → 每轮重复跑 → 快照/下游全部拿不到数据）。
+    history_db = DatabaseManager.get_instance()
 
     ran_any = False
     for strategy in strategies:
         if _screening_ran_since(strategy, since):
             continue
         try:
-            result = ScreeningService(config=config).screen(
+            result = ScreeningService(config=config, db_manager=history_db).screen(
                 strategy=strategy, market=market, max_results=max_results
             )
             ran_any = True

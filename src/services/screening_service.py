@@ -1323,6 +1323,16 @@ class ScreeningService:
         }
         if self.db_manager is not None:
             self.db_manager.save_screening_run(response)
+        else:
+            # fail-loud：绝不静默丢弃选股运行记录。
+            # 历史 bug：调用点漏传 db_manager → 这里静默跳过 → screening_runs 长期为空
+            # → 去重判断失效导致每轮重复跑 → 下游快照永远是空表。
+            logger.error(
+                "[ScreeningService] db_manager 未注入，选股运行结果无法落库"
+                "（run_id=%s strategy=%s）；请检查调用方是否传入 db_manager",
+                response.get("run_id"),
+                response.get("strategy"),
+            )
         return response
 
 
