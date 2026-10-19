@@ -11,7 +11,7 @@ import subprocess
 import threading
 import _thread
 import time
-from datetime import datetime
+from datetime import date, datetime
 from functools import partial
 from queue import Empty
 from types import SimpleNamespace
@@ -626,13 +626,24 @@ def _materialize_and_export_screening_picks(config: Config) -> None:
         )
 
         materialized = materialize_screening_picks(config=config)
-        snapshot = export_daily_snapshot(config=config)
+        # 快照日期必须取「本次物化的 pick_date」，不能用 date.today()。
+        # 跨零点补跑（00:xx 跑前一天 15:30 的任务）时 today 已是第二天，
+        # 会把当天入选写进第二天的文件名，当天快照永远只有表头。
+        data_dates = [d for d in (materialized.get("dates") or []) if d]
+        on_date = None
+        if data_dates:
+            try:
+                on_date = date.fromisoformat(data_dates[-1])
+            except ValueError:
+                on_date = None
+        snapshot = export_daily_snapshot(config=config, on_date=on_date)
         logger.info(
             "[ScreeningSchedule] 明细物化 deduped=%s duplicates=%s with_buy_price=%s；"
-            "快照 %s（%s 行，重写=%s）",
+            "快照日期 %s ｜ 快照 %s（%s 行，重写=%s）",
             materialized.get("deduped"),
             materialized.get("duplicates"),
             materialized.get("with_buy_price"),
+            on_date or "today",
             snapshot.get("path"),
             snapshot.get("rows"),
             snapshot.get("rewritten"),

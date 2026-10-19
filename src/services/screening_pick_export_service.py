@@ -176,6 +176,12 @@ def materialize_screening_picks(
     deduped, duplicates = dedupe_picks(picks)
     result["deduped"] = len(deduped)
     result["duplicates"] = duplicates
+    # 本次物化涉及的 pick_date（升序）。下游导出快照必须按这个日期写文件，
+    # 不能用 date.today()：跨零点补跑时 today 已经是第二天，
+    # 会把当天的入选写到第二天的文件名里，当天快照永远是空表。
+    result["dates"] = sorted(
+        {str(p.get("pick_date")) for p in deduped if p.get("pick_date")}
+    )
     if duplicates:
         # 这是下游最容易算歪的地方，必须每次都说话。
         logger.info(
