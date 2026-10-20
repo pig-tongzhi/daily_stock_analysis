@@ -75,7 +75,8 @@ def save_market_snapshot(
         return 0
 
     manager = DatabaseManager.get_instance()
-    day = as_of or datetime.now(timezone.utc).date()
+    # "今天"必须是北京日期：UTC 日期在北京 16:00 后已经是昨天。
+    day = as_of or datetime.now().date()
     now = datetime.now(timezone.utc).isoformat()
 
     # 注意：不能用 `getattr(df, "columns", []) or []` —— pandas.Index 的真值

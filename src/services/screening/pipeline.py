@@ -570,7 +570,7 @@ def screen(
         max_output=output_count,
         seed=selection_seed,
         period=(
-            f"{datetime.now(timezone.utc).date().isoformat()}"
+            f"{datetime.now().date().isoformat()}"
             f":{market}:{strategy}:{run_id}"
         ),
         analyzer_names=analyzer_names,

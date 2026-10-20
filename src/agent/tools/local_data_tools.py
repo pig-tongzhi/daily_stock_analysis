@@ -126,7 +126,8 @@ def _age_in_days(value: Any) -> Optional[int]:
     if parsed is None:
         return None
     parsed_date = parsed.date() if isinstance(parsed, datetime) else parsed
-    return (datetime.now(timezone.utc).date() - parsed_date).days
+    # 用北京日期算"几天前"：UTC 日期在北京 16:00 后已跨天。
+    return (datetime.now().date() - parsed_date).days
 
 
 def evaluate_local_freshness(local_profile: Dict[str, Any]) -> List[str]:

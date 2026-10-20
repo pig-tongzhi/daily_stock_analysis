@@ -36,7 +36,7 @@ from src.services.screening.config import Config as ScreeningPipelineConfig
 from src.services.screening.pipeline import screen as run_screening_pipeline
 from src.services.screening.source_guard import parse_source_timeout_seconds
 from src.services.screening.strategy import list_strategies as load_screening_strategies
-from src.storage import DatabaseManager
+from src.storage import DatabaseManager, local_naive_now
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ def _parse_cache_datetime(value: Any) -> Optional[datetime]:
         return None
     if parsed.tzinfo is None:
         return parsed                      # naive 视为本地时间
-    return parsed.astimezone()             # 带时区 → 换算到本地
+    return parsed.astimezone().replace(tzinfo=None)   # 带时区 → 换算到本地 naive
 
 
 def _strip_hotspot_search_augmentation(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -188,7 +188,9 @@ def _load_screening_hotspot_detail_cache(
     cached_dt = _parse_cache_datetime(cached_at)
     if cached_dt is None:
         return None
-    age_seconds = max(0.0, (datetime.now(timezone.utc) - cached_dt).total_seconds())
+    # cached_dt 是本地 naive（见 _parse_cache_datetime），这里必须用本地 now，
+    # 否则 aware 减 naive 会抛 TypeError。
+    age_seconds = max(0.0, (local_naive_now() - cached_dt).total_seconds())
     stale = age_seconds > DSA_SCREENING_HOTSPOT_DETAIL_CACHE_TTL_SECONDS
     if stale and not allow_stale:
         return None

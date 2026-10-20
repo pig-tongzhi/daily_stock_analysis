@@ -385,8 +385,10 @@ def _read_last_good_snapshot(
 
 
 def _cache_stale_age_hours(mtime: float, *, created_at: str = "") -> float:
-    modified = _parse_created_at(created_at) or datetime.fromtimestamp(mtime, tz=timezone.utc)
-    age_hours = (datetime.now(timezone.utc) - modified).total_seconds() / 3600.0
+    # _parse_created_at 返回**本地 naive**；fallback 与 now 必须同口径，
+    # 否则 naive 减 aware 会抛 TypeError（2026-10-21 统一时间基准时踩过）。
+    modified = _parse_created_at(created_at) or datetime.fromtimestamp(mtime)
+    age_hours = (datetime.now() - modified).total_seconds() / 3600.0
     return round(max(age_hours, 0.0), 4)
 
 
@@ -399,7 +401,7 @@ def _parse_created_at(value: str) -> datetime | None:
         return None
     if parsed.tzinfo is None:
         return parsed                      # naive 视为本地时间
-    return parsed.astimezone()             # 带时区 → 换算到本地
+    return parsed.astimezone().replace(tzinfo=None)   # 带时区 → 换算到本地 naive
 
 
 def _fetch_efinance() -> pd.DataFrame:

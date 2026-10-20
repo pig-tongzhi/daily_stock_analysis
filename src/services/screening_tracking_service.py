@@ -122,7 +122,11 @@ def _round(value: Optional[float], digits: int = 2) -> Optional[float]:
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    """历史名，实际返回**本地**时间（2026-10-21 全库统一北京时间）。
+
+    保留旧名以免打断调用方；新代码请直接用 datetime.now()。
+    """
+    return datetime.now()
 
 
 def _resolve_database_manager(db_manager: Any = None) -> Any:

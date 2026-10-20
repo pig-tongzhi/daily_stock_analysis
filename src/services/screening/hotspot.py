@@ -1417,7 +1417,7 @@ def _build_summary_route_item(
     ]
     source = summary.provider_used or summary.source or "screening_hotspot"
     return HotspotRouteItem(
-        date=_event_day(datetime.now(timezone.utc).isoformat()),
+        date=_event_day(datetime.now().isoformat()),
         title="当前发酵",
         description=_compact_text("，".join(_dedupe_texts(parts)), max_description_chars),
         source=source,
@@ -1556,8 +1556,8 @@ def _cache_stale_age_hours(path_like: str | Path | None) -> float | None:
     path = Path(path_like)
     if not path.exists():
         return None
-    modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-    age_hours = (datetime.now(timezone.utc) - modified).total_seconds() / 3600.0
+    modified = datetime.fromtimestamp(path.stat().st_mtime)
+    age_hours = (datetime.now() - modified).total_seconds() / 3600.0
     return round(max(age_hours, 0.0), 4)
 
 
