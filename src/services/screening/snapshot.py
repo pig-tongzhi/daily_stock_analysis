@@ -167,6 +167,10 @@ def fetch_snapshot_with_fallback(
                     _record_source_failure(source, error)
                     continue
                 df.attrs.setdefault("snapshot_source", source)
+                # 补齐行业/概念：Wind 与新浪都没有这两个维度，东财有。
+                # 放在"已经拿到行情"之后，且失败不阻塞（行业不参与打分）。
+                if source != "em_datacenter":
+                    df = _enrich_classification(df, source=source)
                 df.attrs["source_errors"] = list(errors)
                 df.attrs["fallback_used"] = False
                 df.attrs["stale"] = False
@@ -222,18 +226,32 @@ def _missing_required_columns(df: pd.DataFrame, required_columns: list[str]) -> 
     return missing
 
 
+# 各源需要的时间差一个数量级，必须分开设超时：
+#   wind          56 批 / 6 并发实测 156 秒
+#   em_datacenter 11 次请求实测 4~16 秒
+#   sina          56 次请求约 30~60 秒
+# 用同一个 60 秒会把 wind 永远掐死（2026-10-21 实测：wind 每次都被
+# "timed out after 60s" 打回，然后静默降级到东财，主源形同虚设）。
+_SOURCE_CALL_TIMEOUTS = {
+    "wind": 300.0,
+    "em_datacenter": 180.0,
+    "sina": 180.0,
+}
+
+
 def _call_snapshot_wrapper(fetcher, *, source: str) -> pd.DataFrame:
     return call_with_timeout(
         fetcher,
-        timeout_sec=_snapshot_call_timeout_seconds(),
+        timeout_sec=_snapshot_call_timeout_seconds(source),
         label=f"snapshot source {source}",
     )
 
 
-def _snapshot_call_timeout_seconds() -> float | None:
+def _snapshot_call_timeout_seconds(source: str | None = None) -> float | None:
+    default = _SOURCE_CALL_TIMEOUTS.get(source or "", _SNAPSHOT_CALL_TIMEOUT_SECONDS)
     return parse_source_timeout_seconds(
         "SCREENING_SNAPSHOT_CALL_TIMEOUT_SEC",
-        default=_SNAPSHOT_CALL_TIMEOUT_SECONDS,
+        default=default,
     )
 
 
@@ -467,6 +485,147 @@ def _parse_created_at(value: str) -> datetime | None:
     return parsed.astimezone().replace(tzinfo=None)   # 带时区 → 换算到本地 naive
 
 
+# 东财只取分类字段（行业/概念/板块），用于给 Wind/新浪 补齐它们缺的维度。
+_EM_CLASSIFICATION_STY = "SECUCODE,SECURITY_CODE,INDUSTRY,CONCEPT,BOARD_NAME"
+_EM_CLASSIFICATION_TIMEOUT = 45
+# 分类补充是"锦上添花"，绝不能拖住主流程：
+#   · 整个步骤硬超时 75 秒（超时就放弃，行情数据已经拿到了）
+#   · 单请求 15 秒、最多 12 页（正常 11 页拉完 5,224 只）
+#   · 失败只记日志与 source_errors，不影响选股
+_EM_ENRICH_HARD_TIMEOUT = 75.0
+_EM_ENRICH_PAGE_TIMEOUT = 15
+_EM_ENRICH_MAX_PAGES = 12
+
+
+def _fetch_em_classification() -> dict[str, dict[str, object]]:
+    """只取东财的 行业/概念，返回 code -> 分类字典。
+
+    三个实测得来的约束（2026-10-21）：
+      · 请求里带上 BOARD_NAME 时，东财每页从 500 条掉到 350 条且后续分页全空，
+        所以只要 INDUSTRY + CONCEPT（board_name 在本仓库零引用）。
+      · 用"只有分类字段"的精简 sty 时同样会截断，必须带上行情字段一起请求。
+      · 这是辅助数据：不重试、单请求 15 秒、最多 12 页，失败就放弃并记日志。
+    """
+    url = "https://data.eastmoney.com/dataapi/xuangu/list"
+    page_size = 500
+    page = 1
+    merged: dict[str, dict[str, object]] = {}
+    while page <= _EM_ENRICH_MAX_PAGES:
+        params = {
+            "st": "SECURITY_CODE",
+            "sr": "1",
+            "ps": str(page_size),
+            "p": str(page),
+            # 必须带行情字段，否则东财会截断（实测只回 348 条且第 2 页为空）
+            "sty": (
+                "SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,NEW_PRICE,"
+                "INDUSTRY,CONCEPT"
+            ),
+            "filter": (
+                '(MARKET+in+("上交所主板","深交所主板","深交所创业板",'
+                '"上交所科创板","北交所"))'
+            ),
+            "source": "SELECT_SECURITIES",
+            "client": "WEB",
+        }
+        response = _eastmoney_get_noretry(
+            url,
+            params=params,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://data.eastmoney.com/xuangu/",
+            },
+            timeout=_EM_ENRICH_PAGE_TIMEOUT,
+        )
+        payload = response.json()
+        if not payload.get("success"):
+            raise RuntimeError(
+                f"em classification error: {payload.get('message', 'unknown')}"
+            )
+        result = payload.get("result") or {}
+        items = result.get("data") or []
+        for item in items:
+            code = str(item.get("SECURITY_CODE") or "").strip()
+            if not code:
+                continue
+            merged[code] = {
+                "industry": item.get("INDUSTRY"),
+                "concepts": item.get("CONCEPT"),
+            }
+        total = result.get("count") or 0
+        if not items or len(items) < page_size:
+            break
+        if page * page_size >= total:
+            break
+        page += 1
+    if not merged:
+        raise RuntimeError("em classification returned no rows")
+    return merged
+
+
+def _enrich_classification(df: pd.DataFrame, *, source: str) -> pd.DataFrame:
+    """给缺分类列的源补上 industry / concepts / board_name。
+
+    fail-open：补不上就用原表（行业只影响喂给 LLM 的上下文，不参与打分）。
+    """
+    if df is None or df.empty or "code" not in df.columns:
+        return df
+    has_industry = "industry" in df.columns and df["industry"].notna().any()
+    has_concepts = "concepts" in df.columns and df["concepts"].notna().any()
+    if has_industry and has_concepts:
+        return df
+    try:
+        # 硬超时：东财慢或挂掉时最多等 75 秒，绝不让选股跟着耗。
+        classification = call_with_timeout(
+            _fetch_em_classification,
+            timeout_sec=_EM_ENRICH_HARD_TIMEOUT,
+            label="em classification enrich",
+        )
+    except Exception as exc:  # noqa: BLE001 - 补不上不影响主流程
+        logger.warning("[Snapshot] 东财分类补充失败（%s 源将缺行业/概念）: %s", source, exc)
+        try:
+            df.attrs["source_errors"] = list(df.attrs.get("source_errors") or []) + [
+                f"classification_enrich: {exc}"
+            ]
+        except Exception:
+            pass
+        return df
+    if not classification:
+        return df
+
+    import json as _json
+
+    industries, concepts, boards = [], [], []
+    for code in df["code"].astype(str):
+        info = classification.get(code.split(".")[0]) or {}
+        industries.append(info.get("industry"))
+        board = info.get("board_name")
+        boards.append(board)
+        raw_concepts = info.get("concepts")
+        if isinstance(raw_concepts, (list, tuple)):
+            concepts.append(_json.dumps(list(raw_concepts), ensure_ascii=False))
+        elif raw_concepts:
+            concepts.append(str(raw_concepts))
+        else:
+            concepts.append(None)
+
+    if not has_industry:
+        df["industry"] = industries
+    else:
+        df["industry"] = df["industry"].where(df["industry"].notna(), pd.Series(industries, index=df.index))
+    if not has_concepts:
+        df["concepts"] = concepts
+    else:
+        df["concepts"] = df["concepts"].where(df["concepts"].notna(), pd.Series(concepts, index=df.index))
+    if "board_name" not in df.columns:
+        df["board_name"] = boards
+
+    filled = int(pd.Series(industries).notna().sum())
+    logger.info("[Snapshot] 东财分类补充完成：%s 只票获得行业（源=%s）", filled, source)
+    df.attrs["classification_enriched"] = True
+    return df
+
+
 def _wind_token() -> str:
     """读 Wind MCP 密钥。只从环境变量读，绝不硬编码进仓库。"""
     for key in ("WIND_MCP_TOKEN", "WIND_TOKEN", "WIND_API_KEY"):
@@ -640,6 +799,17 @@ def _fetch_wind() -> pd.DataFrame:
     if not records:
         raise RuntimeError(f"wind returned no rows (errors={len(errors)})")
 
+    # 完整性闸门：批次部分失败时会把"半份市场"当成功，选股就会在一个残缺
+    # 股票池里挑票，而且没有任何告警（2026-10-21 实测：56 批只成功一半，
+    # 返回 2,899/5,567 行）。低于期望数量的 95% 一律视为失败，交给东财。
+    expected = len(windcodes)
+    got = len(records)
+    if expected and got < expected * 0.95:
+        raise RuntimeError(
+            f"wind incomplete: got {got}/{expected} rows "
+            f"({got * 100 // expected}%), failed batches={len(errors)}"
+        )
+
     df = pd.DataFrame(records)
     # 数据日：Wind 每条都带「最新交易日」（如 20261020）
     trade_dates = [str(v) for v in df.get("trade_date", pd.Series(dtype=str)).unique().tolist()]
@@ -806,7 +976,11 @@ def _fetch_em_datacenter() -> pd.DataFrame:
             "p": str(page),
             "sty": "SECUCODE,SECURITY_CODE,SECURITY_NAME_ABBR,NEW_PRICE,"
                    "CHANGE_RATE,VOLUME_RATIO,DEAL_AMOUNT,TURNOVERRATE,"
-                   "PE9,PBNEWMRQ,TOTAL_MARKET_CAP,CIRCULATION_MARKET_CAP",
+                   "PE9,PBNEWMRQ,TOTAL_MARKET_CAP,CIRCULATION_MARKET_CAP,"
+                   # 注意：不要加 BOARD_NAME —— 实测只要带上它，东财每页就
+                   # 从 500 条掉到 350 条且后续分页全空（只能拿到 350 只票）。
+                   # board_name 在本仓库零引用，去掉无损失。
+                   "INDUSTRY,CONCEPT,MAX_TRADE_DATE",
             "filter": '(MARKET+in+("上交所主板","深交所主板","深交所创业板","上交所科创板","北交所"))',
             "source": "SELECT_SECURITIES",
             "client": "WEB",
@@ -846,6 +1020,29 @@ def _fetch_em_datacenter() -> pd.DataFrame:
     if trade_dates:
         normalized.attrs["trade_date"] = max(trade_dates)
     return normalized
+
+
+def _eastmoney_get_noretry(url: str, **kwargs) -> requests.Response:
+    """单次请求、不重试、带节流的东财 GET。
+
+    用于「拿不到也不该影响主流程」的辅助数据（分类补充）：
+    重试只会把一次失败放大成几十秒的等待。
+    """
+    global _EM_LAST_REQUEST_AT
+    with _EM_LOCK:
+        elapsed = time.monotonic() - _EM_LAST_REQUEST_AT
+        interval = _eastmoney_request_interval_seconds()
+        if elapsed < interval:
+            time.sleep(interval - elapsed)
+        response = requests.get(
+            url,
+            headers=kwargs.get("headers"),
+            params=kwargs.get("params"),
+            timeout=kwargs.get("timeout", _EM_ENRICH_PAGE_TIMEOUT),
+        )
+        _EM_LAST_REQUEST_AT = time.monotonic()
+    response.raise_for_status()
+    return response
 
 
 def _eastmoney_get(url: str, **kwargs) -> requests.Response:
