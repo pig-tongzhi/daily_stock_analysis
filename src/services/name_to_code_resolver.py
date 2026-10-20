@@ -39,6 +39,8 @@ _AKSHARE_CACHE_TTL = 1800  # 30 MIN
 # 仅冷启动（无任何缓存）才退化为本地库。
 _akshare_failure_cache: Optional[float] = None
 _AKSHARE_FAILURE_TTL = 300  # 5 MIN
+# 全量名称表的下限：A 股 5000+ 只。低于此值说明分页拉取只成功了前几页。
+_AKSHARE_MIN_PLAUSIBLE_ENTRIES = 1000
 
 # 拉取超时：akshare 对交易所的部分请求无超时（如上交所 GET、北交所
 # POST），挂起（非失败）时拉取线程永不返回——挂起时异常路径永不触发、
@@ -180,11 +182,26 @@ def _fetch_akshare_df():
     """
     from data_provider.akshare_fetcher import _akshare_call_with_timeout
 
-    return _akshare_call_with_timeout(
+    df = _akshare_call_with_timeout(
         _akshare_stock_info_worker,
         timeout=_AKSHARE_FETCH_TIMEOUT,
         call_name="stock_info_a_code_name",
     )
+    # Akshare 的 stock_info_a_code_name() 是分页拉的（约 18 页）：中途某页失败会
+    # "部分成功"，只回来几十~几百条。这种残缺结果必须当失败处理，否则会把
+    # 缓存换成小表、让名称→代码解析整体退化 —— 2026-10-21 实测只回来 83 条，
+    # 导致 stock_scope / portfolio 的用例随跑序时红时绿。
+    # 校验放在这个网络接缝里：单测 mock 的就是本函数，天然不受影响。
+    if df is not None and not df.empty and len(df) < _AKSHARE_MIN_PLAUSIBLE_ENTRIES:
+        logger.warning(
+            "[NameResolver] 分页拉取疑似半成功（%d < %d 条），按失败处理，保留旧缓存",
+            len(df), _AKSHARE_MIN_PLAUSIBLE_ENTRIES,
+        )
+        raise RuntimeError(
+            f"AkShare 分页拉取只返回 {len(df)} 条，低于合理下限 "
+            f"{_AKSHARE_MIN_PLAUSIBLE_ENTRIES}，视为失败"
+        )
+    return df
 
 
 def _build_name_map_from_df(df) -> Dict[str, str]:
@@ -242,6 +259,21 @@ def _persist_akshare_map(name_map: Dict[str, str]) -> None:
     """
     try:
         path = _AKSHARE_DISK_CACHE_PATH
+        # 不拿残缺表覆盖完整表：一次失败的拉取可能只返回几十条，
+        # 若直接落盘，下次启动就只剩这张小表，名称→代码解析整体退化
+        # （2026-10-21 实测：跑测试触发真实拉取后，磁盘缓存曾被覆盖成小表，
+        #  导致 stock_scope / portfolio 的用例随跑序时红时绿）。
+        try:
+            if path.exists():
+                previous = json.loads(path.read_text(encoding="utf-8")).get("map") or {}
+                if len(previous) >= 100 and len(name_map) < len(previous) * 0.5:
+                    logger.warning(
+                        "[NameResolver] 拒绝用残缺映射覆盖磁盘缓存：新 %d 条 < 旧 %d 条的一半",
+                        len(name_map), len(previous),
+                    )
+                    return
+        except Exception as e:  # 旧文件损坏就正常覆盖
+            logger.debug(f"[NameResolver] 旧磁盘缓存不可读，将覆盖: {e}")
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         tmp.write_text(
@@ -284,6 +316,18 @@ def _spawn_refresh_locked() -> concurrent.futures.Future:
             # 清账，不留死句柄（否则之后每个冷启动请求都白等满超时）。
             with _state_lock:
                 now = time.time()
+                # 残缺表不顶掉完整表：一次失败的拉取可能只回来几十条。
+                # 若直接替换内存缓存，名称→代码解析会整体退化，而且因为
+                # _akshare_disk_checked 只读一次磁盘，整个进程内都无法自愈
+                # —— 2026-10-21 的 flaky（万科A/值得买 时红时绿）正是这么来的。
+                if result and _akshare_cache is not None:
+                    previous = _akshare_cache[1]
+                    if len(previous) >= 100 and len(result) < len(previous) * 0.5:
+                        logger.warning(
+                            "[NameResolver] 拒绝用残缺映射替换内存缓存：新 %d 条 < 旧 %d 条的一半",
+                            len(result), len(previous),
+                        )
+                        result = None
                 if result:
                     _akshare_cache = (now, result)
                     _akshare_failure_cache = None

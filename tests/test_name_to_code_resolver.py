@@ -889,14 +889,38 @@ class TestFetchAkshareDfWiring:
             captured["func"] = func
             captured["timeout"] = kwargs.get("timeout")
             captured["call_name"] = kwargs.get("call_name")
-            return pd.DataFrame({"code": ["600000"], "name": ["浦发银行"]})
+            # 用合理规模的假数据：本用例只验证「委托给了超时包装」，但
+            # _fetch_akshare_df 现在会拒绝「分页半成功」的偏小结果（见下一个用例），
+            # 1 行的假数据会被当成失败。
+            n = ntc._AKSHARE_MIN_PLAUSIBLE_ENTRIES + 1
+            return pd.DataFrame({
+                "code": [f"{600000 + i:06d}" for i in range(n)],
+                "name": [f"股票{i}" for i in range(n)],
+            })
 
         monkeypatch.setattr(af, "_akshare_call_with_timeout", fake_wrapper)
         df = ntc._fetch_akshare_df()
         assert captured["func"] is ntc._akshare_stock_info_worker
         assert captured["timeout"] == ntc._AKSHARE_FETCH_TIMEOUT
         assert captured["call_name"] == "stock_info_a_code_name"
-        assert list(df["name"]) == ["浦发银行"]
+        assert len(df) == ntc._AKSHARE_MIN_PLAUSIBLE_ENTRIES + 1
+
+    def test_rejects_partial_paged_result(self, monkeypatch):
+        """分页拉取「半成功」必须当失败：否则残缺表会顶掉完整缓存。
+
+        2026-10-21 实测：akshare 的 stock_info_a_code_name() 分 ~18 页，
+        某页失败时只回来 83 条，被当成成功写进缓存，导致名称→代码解析
+        整体退化（stock_scope / portfolio 的用例随跑序时红时绿）。
+        """
+        import data_provider.akshare_fetcher as af
+
+        monkeypatch.setattr(
+            af,
+            "_akshare_call_with_timeout",
+            lambda func, *a, **kw: pd.DataFrame({"code": ["600000"], "name": ["浦发银行"]}),
+        )
+        with pytest.raises(RuntimeError, match="低于合理下限"):
+            ntc._fetch_akshare_df()
 
 
 

@@ -1445,6 +1445,11 @@ class TestSymbolNormalizationAcceptsNames:
         assert svc._normalize_symbol_for_storage("") == ""
 
     def test_storage_never_yields_non_ascii(self):
+        # 名称→代码解析依赖模块级索引缓存；用只读预热（不触网），避免顺序敏感。
+        from src.services.name_to_code_resolver import local_name_to_code_map
+
+        local_name_to_code_map()
+
         from src.services.portfolio_service import PortfolioService
 
         svc = PortfolioService.__new__(PortfolioService)

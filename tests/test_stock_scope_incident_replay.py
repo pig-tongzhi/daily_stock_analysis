@@ -313,6 +313,15 @@ class TestToolGuardUnblocks(unittest.TestCase):
 class TestPreviousRoundContract(unittest.TestCase):
     """The mid-session switch / prose-trap contract must not regress."""
 
+    @classmethod
+    def setUpClass(cls):
+        # 预热"名称→代码"映射，让本测试不依赖前序测试是否恰好填过缓存。
+        # 注意用**只读**形式（不传 wait_for_fetch）：这条路径不触网，
+        # 不会因为某次真实拉取失败而把磁盘缓存写成残缺小表。
+        from src.services.name_to_code_resolver import local_name_to_code_map
+
+        local_name_to_code_map()
+
     def _resolve(self, message: str):
         return resolve_stock_scope(
             message, {"stock_code": "600519", "stock_name": "贵州茅台"}

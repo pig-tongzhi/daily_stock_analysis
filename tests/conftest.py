@@ -370,3 +370,4 @@ def _isolate_production_database() -> Iterator[None]:
             os.environ["DATABASE_PATH"] = previous
         _reset_database_singletons()
         shutil.rmtree(tmpdir, ignore_errors=True)
+
