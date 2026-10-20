@@ -27,6 +27,62 @@ logger = logging.getLogger(__name__)
 
 _SNAPSHOT_CACHE_VERSION = 1
 _DEFAULT_TUSHARE_HTTP_URL = "http://api.waditu.com"
+
+# ── Wind（万得）MCP 行情源 ──────────────────────────────────────────────
+# 端点必须用 vserver_stock_data：vserver_wind_tools 上没有行情工具。
+_WIND_MCP_URL = "https://mcp.wind.com.cn/vserver_stock_data/mcp/"
+# 单批代码数：实测 100 只约 15 秒；200 只会返回"服务暂时不可用"。
+_WIND_BATCH_SIZE = 100
+# 并发批次：实测 6 并发仍全部成功，总计 600 只 / 18.5 秒。
+_WIND_MAX_WORKERS = 6
+_WIND_BATCH_TIMEOUT = 180
+_WIND_BATCH_RETRIES = 3
+# 只取这 22 个指标（Wind 单次可返回 34 个，多取会显著变慢）
+_WIND_INDEXES = (
+    "最新交易日,交易时间,中文简称,最新成交价,前收盘价,今日开盘价,今日最高价,今日最低价,"
+    "涨跌幅,涨跌,成交量,成交额,换手率,量比,振幅,"
+    "市盈率(TTM),市盈率(LYR),市净率(LF),"
+    "总市值1,流通市值,总股本,流通份额,上市日期,"
+    "52周最高,52周最低,5日涨跌幅,20日涨跌幅,60日涨跌幅,年初至今涨跌幅,"
+    "股息率,涨停价,跌停价,交易状态"
+)
+# Wind 中文字段 → 标准列名
+_WIND_FIELD_MAP = {
+    "最新交易日": "trade_date",
+    "交易时间": "trade_time",
+    "中文简称": "name",
+    "最新成交价": "price",
+    "前收盘价": "prev_close",
+    "今日开盘价": "open",
+    "今日最高价": "high",
+    "今日最低价": "low",
+    "涨跌幅": "change_pct",
+    "涨跌": "change_amount",
+    "成交量": "volume",
+    "成交额": "amount",
+    "换手率": "turnover_rate",
+    "量比": "volume_ratio",
+    "振幅": "amplitude",
+    "市盈率(TTM)": "pe_ttm",
+    "市盈率(LYR)": "pe_lyr",
+    "市净率(LF)": "pb_ratio",
+    "总市值1": "total_mv",
+    "流通市值": "circ_mv",
+    "总股本": "total_shares",
+    "流通份额": "free_shares",
+    "上市日期": "listing_date",
+    "52周最高": "high_52w",
+    "52周最低": "low_52w",
+    "5日涨跌幅": "change_5d",
+    "20日涨跌幅": "change_20d",
+    "60日涨跌幅": "change_60d",
+    "年初至今涨跌幅": "change_ytd",
+    "股息率": "dividend_yield",
+    "涨停价": "limit_up",
+    "跌停价": "limit_down",
+    "交易状态": "trade_status",
+    "Wind代码": "code",
+}
 _EM_REQUEST_MIN_INTERVAL_SECONDS = 1.0
 _EM_REQUEST_JITTER_SECONDS = 0.3
 _SOURCE_HEALTH_FAILURE_THRESHOLD = 3
@@ -56,6 +112,8 @@ def fetch_cn_snapshot(source: str = "efinance") -> pd.DataFrame:
         return _call_snapshot_wrapper(_fetch_akshare_em, source=source)
     elif source == "em_datacenter":
         return _call_snapshot_wrapper(_fetch_em_datacenter, source=source)
+    elif source == "wind":
+        return _call_snapshot_wrapper(_fetch_wind, source=source)
     elif source == "tushare":
         return _call_snapshot_wrapper(_fetch_tushare, source=source)
     else:
@@ -404,6 +462,255 @@ def _parse_created_at(value: str) -> datetime | None:
     return parsed.astimezone().replace(tzinfo=None)   # 带时区 → 换算到本地 naive
 
 
+def _wind_token() -> str:
+    """读 Wind MCP 密钥。只从环境变量读，绝不硬编码进仓库。"""
+    for key in ("WIND_MCP_TOKEN", "WIND_TOKEN", "WIND_API_KEY"):
+        value = (os.getenv(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _wind_to_windcode(code: str) -> str:
+    """6 位代码 → Wind 代码后缀。已带后缀的原样返回。"""
+    text = str(code or "").strip().upper()
+    if "." in text:
+        return text
+    if not text:
+        return ""
+    if text.startswith("6"):
+        return f"{text}.SH"
+    if text.startswith(("0", "3")):
+        return f"{text}.SZ"
+    if text.startswith(("4", "8", "92")):
+        return f"{text}.BJ"
+    return f"{text}.SZ"
+
+
+def _wind_parse_sse(text: str) -> dict:
+    """解析 MCP 的 SSE 响应，取出 JSON-RPC 结果。
+
+    注意：SSE 规范允许一个事件的多行 data 用换行拼接；服务端返回的大 JSON
+    会被拆成多行 `data:`。只取最后一行会把 JSON 截断
+    （表现为 "Unterminated string starting at …"）。
+    """
+    events: list[list[str]] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            current.append(line[5:].lstrip())
+        elif not line.strip():
+            if current:
+                events.append(current)
+                current = []
+    if current:
+        events.append(current)
+    if not events:
+        raise RuntimeError("wind: empty sse response")
+
+    message = None
+    for chunk in events:
+        # 先试"整事件拼接"（标准做法），再退回逐行
+        for candidate in ("\n".join(chunk), *reversed(chunk)):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict) and ("result" in parsed or "error" in parsed):
+                message = parsed
+                break
+        if message is not None:
+            break
+    if message is None:
+        raise RuntimeError("wind: no json-rpc message in sse response")
+    if message.get("error"):
+        raise RuntimeError(f"wind rpc error: {message['error']}")
+    result = message.get("result") or {}
+    if result.get("isError"):
+        structured = result.get("structuredContent") or {}
+        raise RuntimeError(
+            f"wind tool error: {structured.get('message') or result.get('content')}"
+        )
+    content = result.get("content") or []
+    if not content:
+        return {}
+    return json.loads(content[0].get("text") or "{}")
+
+
+def _wind_call_batch(windcodes: list[str], token: str) -> list[dict]:
+    """拉一批（≤100 只）行情，带重试。"""
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "get_stock_price_indicators",
+            "arguments": {
+                "windcode": ",".join(windcodes),
+                "indexes": _WIND_INDEXES,
+            },
+        },
+    }
+    last_error: Exception | None = None
+    for attempt in range(1, _WIND_BATCH_RETRIES + 1):
+        try:
+            response = requests.post(
+                _WIND_MCP_URL,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                },
+                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                timeout=_WIND_BATCH_TIMEOUT,
+            )
+            response.raise_for_status()
+            # Content-Type 是 text/event-stream 且不带 charset，requests 会按
+            # ISO-8859-1 解码，导致中文字段名全部变成 mojibake（"最新交易日" 读成
+            # "æœ€æ–°äº¤æ˜“æ—¥"），字段映射全部失配。必须显式指定 utf-8。
+            response.encoding = "utf-8"
+            parsed = _wind_parse_sse(response.text)
+            data = (parsed.get("data") or {})
+            columns = [c["name"] for c in (data.get("columns") or [])]
+            rows = data.get("rows") or []
+            out = []
+            for values in rows:
+                record = dict(zip(columns, values))
+                mapped = {}
+                for wind_name, std_name in _WIND_FIELD_MAP.items():
+                    if wind_name in record:
+                        mapped[std_name] = record[wind_name]
+                raw_code = str(mapped.get("code") or "").strip()
+                if raw_code:
+                    # Wind 给的是 600519.SH；全库统一用 6 位代码，
+                    # 否则跨源去重/关联全部失配（2026-10-21 冒烟测试踩到）。
+                    mapped["code"] = raw_code.split(".")[0].zfill(6) if raw_code.split(".")[0].isdigit() else raw_code
+                    mapped["wind_code"] = raw_code
+                    out.append(mapped)
+            return out
+        except Exception as exc:  # noqa: BLE001 - 批级重试
+            last_error = exc
+            _record_source_failure("wind", f"batch attempt {attempt}: {exc}")
+            if attempt < _WIND_BATCH_RETRIES:
+                time.sleep(min(2 ** attempt, 8))
+    raise RuntimeError(f"wind batch failed after {_WIND_BATCH_RETRIES} attempts: {last_error}")
+
+
+def _fetch_wind() -> pd.DataFrame:
+    """从 Wind MCP 拉全市场当日行情（并发分批）。
+
+    为什么需要一份"代码清单"：Wind 的行情工具必须显式传 windcode 列表，
+    没有"返回全市场"的接口。清单优先取 tushare/东财已经拿到的全市场代码，
+    拿不到就退到库里最近一次的代码集合。
+
+    实测性能：100 只/批、6 并发 → 600 只 18.5 秒 → 全市场约 3 分钟。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    token = _wind_token()
+    if not token:
+        raise RuntimeError("wind requires WIND_MCP_TOKEN")
+
+    codes = _wind_universe_codes()
+    if not codes:
+        raise RuntimeError("wind: no universe codes available")
+
+    windcodes = [_wind_to_windcode(c) for c in codes]
+    windcodes = [c for c in windcodes if c]
+    batches = [
+        windcodes[i : i + _WIND_BATCH_SIZE]
+        for i in range(0, len(windcodes), _WIND_BATCH_SIZE)
+    ]
+
+    records: list[dict] = []
+    errors: list[str] = []
+    with ThreadPoolExecutor(max_workers=_WIND_MAX_WORKERS) as executor:
+        futures = [executor.submit(_wind_call_batch, batch, token) for batch in batches]
+        for future in futures:
+            try:
+                records.extend(future.result())
+            except Exception as exc:  # noqa: BLE001 - 单批失败不致命
+                errors.append(f"wind batch: {exc}")
+
+    if not records:
+        raise RuntimeError(f"wind returned no rows (errors={len(errors)})")
+
+    df = pd.DataFrame(records)
+    # 数据日：Wind 每条都带「最新交易日」（如 20261020）
+    trade_dates = [str(v) for v in df.get("trade_date", pd.Series(dtype=str)).unique().tolist()]
+    trade_dates = [d for d in trade_dates if d and d not in ("0", "None", "nan")]
+    if trade_dates:
+        df.attrs["trade_date"] = max(trade_dates)
+    # 单位统一：Wind 的市值/成交额已是"元"
+    for col in ("total_mv", "circ_mv", "amount", "volume"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if errors:
+        df.attrs["source_errors"] = errors
+    return _normalize(df, source="wind")
+
+
+def _wind_universe_codes() -> list[str]:
+    """Wind 需要的代码清单：优先库内全市场，其次 config 全市场文件。"""
+    try:
+        from src.storage import DatabaseManager
+
+        manager = DatabaseManager.get_instance()
+        with manager.get_session() as session:
+            from sqlalchemy import text as _text
+
+            rows = session.execute(
+                _text(
+                    "SELECT code FROM market_snapshot "
+                    "WHERE as_of=(SELECT MAX(as_of) FROM market_snapshot) "
+                    "GROUP BY code"
+                )
+            ).fetchall()
+        codes = [str(r[0]).strip() for r in rows if r and r[0]]
+        if codes:
+            return codes
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[Snapshot] wind 代码清单取 market_snapshot 失败: {exc}")
+
+    # 兜底 1：stock_daily 里出现过的代码
+    try:
+        from src.storage import DatabaseManager
+
+        manager = DatabaseManager.get_instance()
+        with manager.get_session() as session:
+            from sqlalchemy import text as _text
+
+            rows = session.execute(
+                _text("SELECT DISTINCT code FROM stock_daily")
+            ).fetchall()
+        codes = [str(r[0]).strip() for r in rows if r and r[0]]
+        if codes:
+            return codes
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"[Snapshot] wind 代码清单取 stock_daily 失败: {exc}")
+
+    # 兜底 2：回测项目的全市场清单文件
+    for candidate in (
+        Path(__file__).resolve().parents[3] / "p0项目" / "策略回测-2026H1" / "config" / "universe_full.json",
+    ):
+        try:
+            if candidate.exists():
+                payload = json.loads(candidate.read_text(encoding="utf-8"))
+                codes = []
+                if isinstance(payload, dict):
+                    payload = payload.get("codes") or payload.get("symbols") or []
+                for item in payload or []:
+                    text = item.get("code") if isinstance(item, dict) else item
+                    if text:
+                        codes.append(str(text).strip().split(".")[0])
+                codes = [c for c in codes if c]
+                if codes:
+                    return codes
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[Snapshot] wind 代码清单读 universe_full.json 失败: {exc}")
+    return []
+
+
 def _fetch_efinance() -> pd.DataFrame:
     """Fetch via efinance."""
     import efinance as ef
@@ -522,7 +829,18 @@ def _fetch_em_datacenter() -> pd.DataFrame:
         raise RuntimeError("em_datacenter returned no data")
 
     df = pd.DataFrame(all_items)
-    return _normalize(df, source="em_datacenter")
+    normalized = _normalize(df, source="em_datacenter")
+    # 东财每条都带 MAX_TRADE_DATE（如 2026-10-20）—— 这是权威的数据日，
+    # 不能再用"什么时候跑的"去推（凌晨补跑会把前一天的行情标成今天）。
+    trade_dates = []
+    if "MAX_TRADE_DATE" in normalized.columns:
+        trade_dates = [
+            str(v).strip() for v in normalized["MAX_TRADE_DATE"].dropna().unique().tolist()
+        ]
+    trade_dates = [d for d in trade_dates if d and d not in ("0", "None", "nan")]
+    if trade_dates:
+        normalized.attrs["trade_date"] = max(trade_dates)
+    return normalized
 
 
 def _eastmoney_get(url: str, **kwargs) -> requests.Response:
@@ -683,6 +1001,26 @@ def _prepare_tushare_snapshot(
     return _normalize(merged, source="tushare")
 
 
+def snapshot_trade_date(df: pd.DataFrame) -> date | None:
+    """从快照 attrs 里取数据日并转成 date。
+
+    数据源给的是 "20261020"（Wind）或 "2026-10-20"（东财）；都没有时返回 None，
+    调用方必须显式决定怎么兜底，不允许默默用"今天"。
+    """
+    if df is None:
+        return None
+    raw = getattr(df, "attrs", {}).get("trade_date")
+    if not raw:
+        return None
+    text = str(raw).strip().replace("-", "").replace("/", "")[:8]
+    if len(text) == 8 and text.isdigit():
+        try:
+            return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+        except ValueError:
+            return None
+    return None
+
+
 def _normalize(df: pd.DataFrame, source: str) -> pd.DataFrame:
     """Normalize column names to a standard schema.
 
@@ -752,6 +1090,21 @@ def _normalize(df: pd.DataFrame, source: str) -> pd.DataFrame:
             "industry": ["INDUSTRY", "INDUSTRY_NAME", "BOARD_NAME"],
             "concepts": ["CONCEPT", "CONCEPT_NAME", "THEME_NAME"],
         }
+    elif source == "wind":
+        # 列已在 _fetch_wind 里映射成标准名，这里只做同义兜底。
+        standard_cols = {
+            "code": ["code", "Wind代码"],
+            "name": ["name", "中文简称"],
+            "price": ["price", "最新成交价"],
+            "change_pct": ["change_pct", "涨跌幅"],
+            "amount": ["amount", "成交额"],
+            "total_mv": ["total_mv", "总市值1"],
+            "circ_mv": ["circ_mv", "流通市值"],
+            "pe_ttm": ["pe_ttm", "市盈率(TTM)"],
+            "pb_ratio": ["pb_ratio", "市净率(LF)"],
+            "volume_ratio": ["volume_ratio", "量比"],
+            "turnover_rate": ["turnover_rate", "换手率"],
+        }
     elif source == "tushare":
         standard_cols = {
             "code": ["symbol", "code"],
@@ -776,7 +1129,11 @@ def _normalize(df: pd.DataFrame, source: str) -> pd.DataFrame:
     # Coerce numeric columns
     numeric_cols = [
         "price", "change_pct", "amount", "total_mv", "circ_mv",
-        "pe_ratio", "pb_ratio", "volume_ratio", "turnover_rate",
+        "pe_ratio", "pe_ttm", "pe_lyr", "pb_ratio", "volume_ratio", "turnover_rate",
+        "prev_close", "open", "high", "low", "change_amount", "amplitude",
+        "volume", "dividend_yield", "total_shares", "free_shares",
+        "high_52w", "low_52w", "change_5d", "change_20d", "change_60d", "change_ytd",
+        "limit_up", "limit_down",
     ]
     for col in numeric_cols:
         if col in df.columns:

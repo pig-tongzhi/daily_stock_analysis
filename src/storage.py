@@ -239,6 +239,60 @@ class CompanyMetrics(Base):
 
 
 
+class ScreeningCandidate(Base):
+    """候选票 + 技术因子（第二段筛选的输入与结果）。
+
+    为什么单独一张表：技术因子只对"粗筛后的约 100 只"计算，
+    塞进 market_snapshot（5575 只）会让 99% 的格子是 NULL。
+    单独存还能回答"这只票为什么没选上"（reject_reason）与"当时判断对不对"。
+    """
+
+    __tablename__ = 'screening_candidates'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, index=True)
+    run_id = Column(String(32), nullable=False, index=True)
+    strategy = Column(String(32), nullable=False, index=True)
+    code = Column(String(16), nullable=False, index=True)
+    name = Column(String(64), nullable=True)
+
+    # 第一段留下的快照值（便于回看"为什么进候选"）
+    price = Column(Float, nullable=True)
+    change_pct = Column(Float, nullable=True)
+    amount = Column(Float, nullable=True)
+    total_mv = Column(Float, nullable=True)
+    circ_mv = Column(Float, nullable=True)
+    pe_ttm = Column(Float, nullable=True)
+    pb_ratio = Column(Float, nullable=True)
+    turnover_rate = Column(Float, nullable=True)
+    volume_ratio = Column(Float, nullable=True)
+
+    # 技术因子（从 daily_bars 计算）
+    ma5 = Column(Float, nullable=True)
+    ma10 = Column(Float, nullable=True)
+    ma20 = Column(Float, nullable=True)
+    ma60 = Column(Float, nullable=True)
+    above_ma20 = Column(Boolean, nullable=True)
+    ma_bullish = Column(Boolean, nullable=True)
+    macd_status = Column(String(16), nullable=True)
+    atr_20_pct = Column(Float, nullable=True)
+    volatility_20d = Column(Float, nullable=True)
+    max_drawdown_20d = Column(Float, nullable=True)
+    range_20d_pct = Column(Float, nullable=True)
+    breakout_20d_pct = Column(Float, nullable=True)
+    pullback_ma20_pct = Column(Float, nullable=True)
+    consolidation_days = Column(Integer, nullable=True)
+    body_pct = Column(Float, nullable=True)
+    change_60d = Column(Float, nullable=True)
+    volume_ratio_20d = Column(Float, nullable=True)
+    signal_score = Column(Float, nullable=True)
+
+    # 判定
+    passed = Column(Boolean, nullable=True)
+    reject_reason = Column(String(128), nullable=True)
+    created_at = Column(DateTime, nullable=True)
+
+
 class MarketSnapshot(Base):
     """全市场横截面快照（第 1 层：只存可筛选的数值，不存描述性文本）。
 
@@ -256,20 +310,73 @@ class MarketSnapshot(Base):
 
     __tablename__ = 'market_snapshot'
 
+    @property
+    def pe_ratio(self):
+        """向后兼容别名：历史代码/查询用 pe_ratio，语义就是 TTM 市盈率。"""
+        return self.pe_ttm
+
+    @pe_ratio.setter
+    def pe_ratio(self, value):
+        """允许赋值：老代码（含测试夹具）仍会写 snapshot.pe_ratio = x。"""
+        self.pe_ttm = value
+
     canonical_id = Column(String(32), primary_key=True)
     as_of = Column(Date, primary_key=True)
     code = Column(String(16), nullable=False, index=True)
     name = Column(String(64), nullable=True)
-    industry = Column(String(32), nullable=True, index=True)
+
+    # ── 分类（东财补；wind 不提供）──
+    industry = Column(String(64), nullable=True, index=True)
+    board_name = Column(String(64), nullable=True)
+    concepts = Column(Text, nullable=True)      # JSON 数组字符串
+
+    # ── 价格 ──
+    prev_close = Column(Float, nullable=True)
+    open = Column(Float, nullable=True)
+    high = Column(Float, nullable=True)
+    low = Column(Float, nullable=True)
     price = Column(Float, nullable=True)
+    change_amount = Column(Float, nullable=True)
     change_pct = Column(Float, nullable=True)
+    amplitude = Column(Float, nullable=True)
+
+    # ── 成交 ──
+    volume = Column(Float, nullable=True)
     amount = Column(Float, nullable=True)
-    total_mv = Column(Float, nullable=True)
-    pe_ratio = Column(Float, nullable=True)
-    pb_ratio = Column(Float, nullable=True)
-    volume_ratio = Column(Float, nullable=True)
     turnover_rate = Column(Float, nullable=True)
+    volume_ratio = Column(Float, nullable=True)
+
+    # ── 估值 ──
+    pe_ttm = Column(Float, nullable=True)
+    pe_lyr = Column(Float, nullable=True)
+    pb_ratio = Column(Float, nullable=True)
+    dividend_yield = Column(Float, nullable=True)
+
+    # ── 规模 ──
+    total_mv = Column(Float, nullable=True)
+    circ_mv = Column(Float, nullable=True)
+    total_shares = Column(Float, nullable=True)
+    free_shares = Column(Float, nullable=True)
+
+    # ── 位置与动量（wind 独有）──
+    high_52w = Column(Float, nullable=True)
+    low_52w = Column(Float, nullable=True)
+    change_5d = Column(Float, nullable=True)
+    change_20d = Column(Float, nullable=True)
+    change_60d = Column(Float, nullable=True)
+    change_ytd = Column(Float, nullable=True)
+
+    # ── 交易状态 ──
+    limit_up = Column(Float, nullable=True)
+    limit_down = Column(Float, nullable=True)
+    trade_status = Column(String(32), nullable=True)
+    listing_date = Column(Date, nullable=True)
+
+    # ── 元数据 ──
+    trade_time = Column(DateTime, nullable=True)
     snapshot_source = Column(String(32), nullable=True)
+    # 源返回的原始 JSON：防"字段漏存"，将来可从这里补齐而无需重新拉数。
+    raw_payload = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=True)
 
 
@@ -421,6 +528,7 @@ class ScreeningRun(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     run_id = Column(String(64), nullable=False, unique=True, index=True)
+    status = Column(String(16), nullable=True, default='ok')
     strategy = Column(String(64), nullable=False, index=True)
     market = Column(String(16), nullable=False, index=True)
     snapshot_source = Column(String(64), index=True)
@@ -2778,6 +2886,7 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             "source_errors_json": self._safe_json_dumps(normalized_payload.get("source_errors") or []),
             "warnings_json": self._safe_json_dumps(warnings),
             "result_json": self._safe_json_dumps(normalized_payload),
+            "status": str(normalized_payload.get("status") or "ok").strip() or "ok",
         }
 
         try:

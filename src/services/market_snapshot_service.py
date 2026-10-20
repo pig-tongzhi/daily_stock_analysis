@@ -13,22 +13,117 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
 # 快照 DataFrame 的列 → 表字段。缺列时该字段留空，不影响其余列入库。
+# 标准列 → market_snapshot 列。统一用 _normalize() 之后的标准名；
+# 每加一个源字段就在这里加一行，避免"源给了但没落库"（2026-10-21 审计发现
+# 东财给了 19 个字段只落了 11 个）。
 _COLUMN_MAP = {
+    # 价格
+    "prev_close": "prev_close",
+    "open": "open",
+    "high": "high",
+    "low": "low",
     "price": "price",
+    "change_amount": "change_amount",
     "change_pct": "change_pct",
+    "amplitude": "amplitude",
+    # 成交
+    "volume": "volume",
     "amount": "amount",
-    "total_mv": "total_mv",
-    "pe_ratio": "pe_ratio",
-    "pb_ratio": "pb_ratio",
-    "volume_ratio": "volume_ratio",
     "turnover_rate": "turnover_rate",
+    "volume_ratio": "volume_ratio",
+    # 估值
+    "pe_ttm": "pe_ttm",
+    "pe_lyr": "pe_lyr",
+    "pb_ratio": "pb_ratio",
+    "dividend_yield": "dividend_yield",
+    # 规模
+    "total_mv": "total_mv",
+    "circ_mv": "circ_mv",
+    "total_shares": "total_shares",
+    "free_shares": "free_shares",
+    # 位置与动量
+    "high_52w": "high_52w",
+    "low_52w": "low_52w",
+    "change_5d": "change_5d",
+    "change_20d": "change_20d",
+    "change_60d": "change_60d",
+    "change_ytd": "change_ytd",
+    # 交易状态
+    "limit_up": "limit_up",
+    "limit_down": "limit_down",
 }
+
+# 向后兼容：老代码/老数据源仍用 pe_ratio 这个名字代表 TTM 市盈率。
+_COLUMN_ALIASES = {"pe_ratio": "pe_ttm"}
+
+# 文本类字段
+_TEXT_MAP = {
+    "board_name": "board_name",
+    "concepts": "concepts",
+    "trade_status": "trade_status",
+}
+
+
+def _to_date(value: Any) -> Optional[date]:
+    """把各种日期表示统一成 date。支持 20261020 / 2026-10-20 / 2026/10/20。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    text = str(value).strip()
+    if not text or text in ("-", "--", "None"):
+        return None
+    digits = text.replace("-", "").replace("/", "").replace(" ", "")[:8]
+    if len(digits) == 8 and digits.isdigit():
+        try:
+            return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        except ValueError:
+            return None
+    return None
+
+
+def _to_datetime(value: Any) -> Optional[datetime]:
+    """解析行情时刻。Wind 给的是 2026-10-20T15:30:31.000+08:00。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    # 统一存成"北京时间 naive"，与全库约定一致
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+    return parsed
+
+
+def _to_payload(record: Any) -> Optional[str]:
+    """把原始记录整条序列化留档，防止"源给了但没落库"。"""
+    if not record:
+        return None
+    try:
+        import json as _json
+
+        def _default(obj):
+            if isinstance(obj, (datetime, date)):
+                return obj.isoformat()
+            return str(obj)
+
+        return _json.dumps(dict(record), ensure_ascii=False, default=_default)
+    except Exception:
+        return None
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -75,8 +170,22 @@ def save_market_snapshot(
         return 0
 
     manager = DatabaseManager.get_instance()
-    # "今天"必须是北京日期：UTC 日期在北京 16:00 后已经是昨天。
-    day = as_of or datetime.now().date()
+    # 优先用数据源自带的「数据日」；只有在源没给时才退回北京日期。
+    # 历史 bug：一律用 datetime.now().date() → 凌晨/周末补跑会把前一天的行情
+    # 标成当天（2026-10-20 的 10-17 周六快照就是这么来的）。
+    day = as_of
+    if day is None:
+        try:
+            from src.services.screening.snapshot import snapshot_trade_date
+
+            day = snapshot_trade_date(snapshot_df)
+        except Exception:
+            day = None
+    if day is None:
+        day = datetime.now().date()
+        logger.warning(
+            "[MarketSnapshot] 数据源未提供数据日，退回运行日 %s（来源=%s）", day, source
+        )
     now = datetime.now(timezone.utc).isoformat()
 
     # 注意：不能用 `getattr(df, "columns", []) or []` —— pandas.Index 的真值
@@ -102,9 +211,25 @@ def save_market_snapshot(
             "industry": (str(record.get("industry")).strip() if record.get("industry") else None),
             "snapshot_source": source or None,
             "created_at": now,
+            "listing_date": _to_date(record.get("listing_date")),
+            "trade_time": _to_datetime(record.get("trade_time")),
+            # 原始返回整条留档：将来发现漏存字段可直接补齐，不必重拉。
+            "raw_payload": _to_payload(record),
         }
         for src_col, field in _COLUMN_MAP.items():
             row[field] = _to_float(record.get(src_col)) if src_col in columns else None
+        # 兼容老数据源的 pe_ratio / 新数据源的 pe_ttm
+        if row.get("pe_ttm") is None:
+            row["pe_ttm"] = _to_float(record.get("pe_ratio"))
+        for src_col, field in _TEXT_MAP.items():
+            value = record.get(src_col)
+            if value is None or value == "":
+                row[field] = None
+            elif isinstance(value, (list, tuple)):
+                import json as _json
+                row[field] = _json.dumps(list(value), ensure_ascii=False)
+            else:
+                row[field] = str(value).strip()
         rows.append(row)
 
     if not rows:
@@ -113,19 +238,65 @@ def save_market_snapshot(
     sql = text(
         """
         INSERT INTO market_snapshot
-            (canonical_id, as_of, code, name, industry, price, change_pct, amount,
-             total_mv, pe_ratio, pb_ratio, volume_ratio, turnover_rate,
-             snapshot_source, created_at)
+            (canonical_id, as_of, code, name, industry,
+             board_name, concepts, prev_close, open, high,
+             low, price, change_amount, change_pct, amplitude,
+             volume, amount, turnover_rate, volume_ratio, pe_ttm,
+             pe_lyr, pb_ratio, dividend_yield, total_mv, circ_mv,
+             total_shares, free_shares, high_52w, low_52w, change_5d,
+             change_20d, change_60d, change_ytd, limit_up, limit_down,
+             trade_status, listing_date, trade_time, snapshot_source, raw_payload,
+             created_at)
         VALUES
-            (:canonical_id, :as_of, :code, :name, :industry, :price, :change_pct, :amount,
-             :total_mv, :pe_ratio, :pb_ratio, :volume_ratio, :turnover_rate,
-             :snapshot_source, :created_at)
+            (:canonical_id, :as_of, :code, :name, :industry,
+             :board_name, :concepts, :prev_close, :open, :high,
+             :low, :price, :change_amount, :change_pct, :amplitude,
+             :volume, :amount, :turnover_rate, :volume_ratio, :pe_ttm,
+             :pe_lyr, :pb_ratio, :dividend_yield, :total_mv, :circ_mv,
+             :total_shares, :free_shares, :high_52w, :low_52w, :change_5d,
+             :change_20d, :change_60d, :change_ytd, :limit_up, :limit_down,
+             :trade_status, :listing_date, :trade_time, :snapshot_source, :raw_payload,
+             :created_at)
         ON CONFLICT(canonical_id, as_of) DO UPDATE SET
-            code=excluded.code, name=excluded.name, industry=excluded.industry,
-            price=excluded.price, change_pct=excluded.change_pct, amount=excluded.amount,
-            total_mv=excluded.total_mv, pe_ratio=excluded.pe_ratio, pb_ratio=excluded.pb_ratio,
-            volume_ratio=excluded.volume_ratio, turnover_rate=excluded.turnover_rate,
-            snapshot_source=excluded.snapshot_source
+            code=excluded.code,
+            name=excluded.name,
+            industry=excluded.industry,
+            board_name=excluded.board_name,
+            concepts=excluded.concepts,
+            prev_close=excluded.prev_close,
+            open=excluded.open,
+            high=excluded.high,
+            low=excluded.low,
+            price=excluded.price,
+            change_amount=excluded.change_amount,
+            change_pct=excluded.change_pct,
+            amplitude=excluded.amplitude,
+            volume=excluded.volume,
+            amount=excluded.amount,
+            turnover_rate=excluded.turnover_rate,
+            volume_ratio=excluded.volume_ratio,
+            pe_ttm=excluded.pe_ttm,
+            pe_lyr=excluded.pe_lyr,
+            pb_ratio=excluded.pb_ratio,
+            dividend_yield=excluded.dividend_yield,
+            total_mv=excluded.total_mv,
+            circ_mv=excluded.circ_mv,
+            total_shares=excluded.total_shares,
+            free_shares=excluded.free_shares,
+            high_52w=excluded.high_52w,
+            low_52w=excluded.low_52w,
+            change_5d=excluded.change_5d,
+            change_20d=excluded.change_20d,
+            change_60d=excluded.change_60d,
+            change_ytd=excluded.change_ytd,
+            limit_up=excluded.limit_up,
+            limit_down=excluded.limit_down,
+            trade_status=excluded.trade_status,
+            listing_date=excluded.listing_date,
+            trade_time=excluded.trade_time,
+            snapshot_source=excluded.snapshot_source,
+            raw_payload=excluded.raw_payload,
+            created_at=excluded.created_at
         """
     )
 

@@ -1322,6 +1322,11 @@ class ScreeningService:
             "result_variant_applied": bool(raw_data.get("result_variant_applied")),
             "result_variant_pool_size": raw_data.get("result_variant_pool_size") or 0,
             "result_variant_rotated_slots": raw_data.get("result_variant_rotated_slots") or 0,
+            # 这批票用的是哪一天的行情。必须记录：下游 pick_date 依赖它，
+            # 而不是"什么时候跑的"（2026-10-21 之前用的是 created_at，凌晨
+            # 补跑会把前一天的行情标成今天）。
+            "snapshot_trade_date": raw_data.get("snapshot_trade_date"),
+            "snapshot_source": raw_data.get("snapshot_source"),
         }
         if self.db_manager is not None:
             self.db_manager.save_screening_run(response)

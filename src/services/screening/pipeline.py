@@ -178,6 +178,15 @@ def screen(
         degradation.extend(f"Industry/concepts enrichment: {item}" for item in industry_notes)
     snapshot_count = len(snapshot_df)
     snapshot_source = str(snapshot_df.attrs.get("snapshot_source", ""))
+    # 数据日只在拿到快照后算一次，贯穿 result_json / pick_date / 落库
+    _trade_date_text = ""
+    try:
+        from src.services.screening.snapshot import snapshot_trade_date
+
+        _td = snapshot_trade_date(snapshot_df)
+        _trade_date_text = _td.isoformat() if _td else ""
+    except Exception:
+        _trade_date_text = ""
     source_errors = [str(item) for item in snapshot_df.attrs.get("source_errors", [])]
     degradation.extend(f"Snapshot source fallback: {item}" for item in source_errors)
 
@@ -599,6 +608,7 @@ def screen(
         ranking_mode="llm" if llm_ranked else "factor",
         degradation=degradation,
         snapshot_source=snapshot_source,
+        snapshot_trade_date=_trade_date_text,
         source_errors=source_errors,
         deep_analysis_requested=("dsa" in analyzer_names),
         post_analyzers=analyzer_names,

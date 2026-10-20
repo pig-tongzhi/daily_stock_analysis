@@ -712,9 +712,30 @@ def _run_screening_schedule_tick(config: Config) -> None:
                 result.get("run_id"),
                 result.get("candidate_count"),
             )
-        except Exception:
+        except Exception as exc:
             # 单个策略失败不能拖垮其余策略，也不能让定时任务永久死掉。
             logger.exception("[ScreeningSchedule] strategy=%s failed", strategy)
+            # 失败也要落一条 run 记录（标记失败），否则去重查不到它 →
+            # 每 60 秒重试一次，一直重试到 120 分钟的补跑窗口关闭
+            # （2026-10-21 审计：失败不落库是"反复重试"的根因）。
+            try:
+                history_db.save_screening_run(
+                    {
+                        "run_id": f"failed-{int(time.time())}-{strategy}"[:32],
+                        "strategy": strategy,
+                        "market": market,
+                        "status": "failed",
+                        "candidate_count": 0,
+                        "candidates": [],
+                        "snapshot_source": "",
+                        "snapshot_trade_date": "",
+                        "error": str(exc)[:500],
+                    }
+                )
+            except Exception:
+                logger.warning(
+                    "[ScreeningSchedule] 失败记录落库也失败 strategy=%s", strategy
+                )
 
     if ran_any:
         # 跑完立刻物化 + 导当日快照：下游要的就是这份 append-only 文件。

@@ -258,6 +258,10 @@ def load_pick_rows(
         if result is None:
             malformed += 1
             continue
+        # pick_date 必须等于"这批票用的行情是哪天的"，而不是"什么时候跑的"。
+        # 历史上用 date(created_at) 推：凌晨补跑会把前一天的行情标成今天；
+        # 数据源现在会告诉我们真实数据日（Wind「最新交易日」/ 东财 MAX_TRADE_DATE）。
+        trade_date = _coerce_date(result.get("snapshot_trade_date")) or run["run_date"]
         for candidate in _iter_candidate_dicts(result):
             code = str(candidate.get("code") or "").strip()
             if not code:
@@ -267,7 +271,7 @@ def load_pick_rows(
                     "run_id": run["run_id"],
                     "strategy": run["strategy"],
                     "market": run["market"],
-                    "pick_date": run["run_date"],
+                    "pick_date": trade_date,
                     "code": code,
                     "name": str(candidate.get("name") or "").strip(),
                     "pick_price": _coerce_float(candidate.get("price")),

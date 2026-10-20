@@ -62,7 +62,7 @@ MIN_USABLE_ROWS = 100
 # 注意 volume_ratio 故意不在表内：实测该列 5565 行全为 NULL（上游没给），
 # 放进来只会让调用方拿到"没有数据"的分位。
 _METRIC_COLUMNS = {
-    "pe_ratio": "pe_ratio",
+    "pe_ratio": "pe_ttm",
     "pb_ratio": "pb_ratio",
     "total_mv": "total_mv",
     "amount": "amount",
@@ -440,7 +440,9 @@ def _handle_get_market_context(
             # 分组，这样既能算每天每个 metric 的可用行数，又不需要把列名拼进 SQL。
             all_rows = conn.execute(
                 text(
-                    "SELECT as_of, canonical_id, code, name, pe_ratio, pb_ratio, total_mv, "
+                    # 2026-10-21：pe_ratio 列已改名 pe_ttm（语义就是 TTM 市盈率）。
+                    # 下游统一用 pe_ttm，避免"列名对不上"导致 db_query_failed。
+                    "SELECT as_of, canonical_id, code, name, pe_ttm, pb_ratio, total_mv, "
                     "amount, change_pct, price, turnover_rate FROM market_snapshot"
                 )
             ).fetchall()

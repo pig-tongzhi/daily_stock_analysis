@@ -24,8 +24,12 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _PACKAGE_DIR = Path(__file__).resolve().parent
 DEFAULT_POST_ANALYZERS = ["scorecard"]
 DEFAULT_LLM_MODEL = "gemini/gemini-2.5-flash"
-DEFAULT_SNAPSHOT_SOURCE_PRIORITY = ["sina", "efinance", "akshare_em", "em_datacenter"]
-TUSHARE_FIRST_SOURCE_PRIORITY = ["tushare", "sina", "efinance", "akshare_em", "em_datacenter"]
+# 2026-10-21 重建：Wind 提到第一（实测 5567 只 / 156 秒 / 0 批次失败，
+# 且自带「最新交易日」）；东财第二（唯一提供行业/概念，11 次请求 4 秒）；
+# 新浪第三（缺量比/概念/数据日，56+ 次请求）。
+# efinance / akshare_em 已移除：79 次生产运行中成功 0 次。
+DEFAULT_SNAPSHOT_SOURCE_PRIORITY = ["wind", "em_datacenter", "sina"]
+TUSHARE_FIRST_SOURCE_PRIORITY = ["tushare", "wind", "em_datacenter", "sina"]
 # Upper bound for SCREENING_INTELLIGENCE_CONTEXT_MAX_CHARS. Mirrors the ceiling
 # enforced by src/config.py; the section is also bounded by llm_context_max_chars.
 MAX_INTELLIGENCE_CONTEXT_MAX_CHARS = 4000
@@ -383,7 +387,10 @@ class Config:
             fallback_snapshot_path=fallback_snapshot_path,
             snapshot_cache_ttl_seconds=max(
                 0.0,
-                _parse_float_env("SCREENING_SNAPSHOT_CACHE_TTL_SEC", 300.0),
+                # 2026-10-21：300 → 2400。实测 10 个策略串行跑一轮 26.6 分钟，
+                # 而 5 分钟 TTL 导致同一份快照被重抓约 4 次（一轮里 24 分钟在
+                # 下载同一份数据）。40 分钟覆盖一整轮，一圈降到 8~10 分钟。
+                _parse_float_env("SCREENING_SNAPSHOT_CACHE_TTL_SEC", 2400.0),
             ),
             snapshot_fallback_max_age_hours=_parse_optional_float_env(
                 "SNAPSHOT_FALLBACK_MAX_AGE_HOURS"

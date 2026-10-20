@@ -222,6 +222,9 @@ class ScreenResult:
     ranking_mode: str = "factor"
     degradation: list[str] = field(default_factory=list)
     snapshot_source: str = ""
+    # 这批票用的是哪一天的行情（"2026-10-20"）。下游 pick_date 用它，
+    # 不能再用"什么时候跑的"推 —— 凌晨补跑会标错日期。
+    snapshot_trade_date: str = ""
     source_errors: list[str] = field(default_factory=list)
     deep_analysis_requested: bool = False
     post_analyzers: list[str] = field(default_factory=list)
