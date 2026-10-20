@@ -16,8 +16,8 @@ from src.schemas.decision_profile import (
 from src.storage import (
     DatabaseManager,
     DecisionSignalRecord,
-    to_utc_naive_datetime,
-    utc_naive_now,
+    to_local_naive_datetime,
+    local_naive_now,
 )
 
 
@@ -310,13 +310,13 @@ class DecisionSignalRepository:
             row.status = status
             if replace_metadata:
                 row.metadata_json = metadata_json
-            row.updated_at = utc_naive_now()
+            row.updated_at = local_naive_now()
             session.commit()
             session.refresh(row)
             return row
 
     def expire_due_signals(self, now: Optional[datetime] = None) -> int:
-        now_value = to_utc_naive_datetime(now) if now is not None else utc_naive_now()
+        now_value = to_local_naive_datetime(now) if now is not None else local_naive_now()
         with self.db.get_session() as session:
             rows = session.execute(
                 select(DecisionSignalRecord).where(
@@ -337,14 +337,14 @@ class DecisionSignalRepository:
         for field_name in ("expires_at", "created_at", "updated_at"):
             value = normalized.get(field_name)
             if isinstance(value, datetime):
-                normalized[field_name] = to_utc_naive_datetime(value)
+                normalized[field_name] = to_local_naive_datetime(value)
         return normalized
 
     @staticmethod
     def _normalize_optional_datetime(value: Optional[datetime]) -> Optional[datetime]:
         if value is None:
             return None
-        return to_utc_naive_datetime(value)
+        return to_local_naive_datetime(value)
 
     @classmethod
     def _should_refresh_existing(cls, existing: DecisionSignalRecord, fields: Dict[str, Any]) -> bool:
@@ -353,7 +353,7 @@ class DecisionSignalRepository:
             existing.status == "expired"
             and fields.get("status") == "active"
             and expires_at is not None
-            and expires_at > utc_naive_now()
+            and expires_at > local_naive_now()
         )
 
     @classmethod
@@ -362,7 +362,7 @@ class DecisionSignalRepository:
             if field_name in cls._IMMUTABLE_REFRESH_FIELDS:
                 continue
             setattr(existing, field_name, value)
-        existing.updated_at = utc_naive_now()
+        existing.updated_at = local_naive_now()
 
     @staticmethod
     def _find_existing_in_session(*, session: Any, fields: Dict[str, Any]) -> Optional[DecisionSignalRecord]:
@@ -488,7 +488,7 @@ class DecisionSignalRepository:
             existing.market_phase = new_phase
             changed = True
         if changed:
-            existing.updated_at = utc_naive_now()
+            existing.updated_at = local_naive_now()
         return changed
 
     @classmethod

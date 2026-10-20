@@ -14,7 +14,7 @@ from src.storage import (
     DatabaseManager,
     SkillOpinionOutcomeRecord,
     SkillOpinionSampleRecord,
-    utc_naive_now,
+    local_naive_now,
 )
 
 
@@ -174,7 +174,7 @@ class SkillOpinionOutcomeRepository:
                 }:
                     continue
                 setattr(existing, key, value)
-            existing.updated_at = utc_naive_now()
+            existing.updated_at = local_naive_now()
             session.flush()
             return int(existing.id), "updated"
 

@@ -605,12 +605,10 @@ def _screening_ran_since(strategy: str, since: datetime) -> bool:
 
     from src.storage import DatabaseManager
 
-    # screening_runs.created_at 存的是 UTC-naive（见 storage.utc_naive_now），
-    # 而 since 是从 "现在" 推出来的本地 naive 时间。不转换就会把 15:30 本地
-    # 当成 15:30 UTC 去比，UTC 的 07:32 永远小于它 → 每轮都判"今天还没跑"
-    # → 同一策略被重复跑（2026-10-20 实测 4 轮，耗时翻 4 倍，导出拖到 17:32，
-    #   晚于本机 17:15 的拉取动作，当天日报直接拿不到数据）。
-    since_utc = since.astimezone(timezone.utc).replace(tzinfo=None)
+    # 2026-10-21 全库统一为北京时间后，created_at 与 since 同为本地 naive，
+    # 可以直接比较。历史上这里曾把本地 since 转成 UTC 去比 UTC 的 created_at，
+    # 那是在迁就"6 张表 UTC / 15 张表本地"的旧分裂；现已统一，不再需要转换。
+    since_local = since if since.tzinfo is None else since.astimezone().replace(tzinfo=None)
 
     db = DatabaseManager.get_instance()
     with db.get_session() as session:
@@ -619,7 +617,7 @@ def _screening_ran_since(strategy: str, since: datetime) -> bool:
                 "SELECT COUNT(*) FROM screening_runs "
                 "WHERE strategy = :strategy AND created_at >= :since"
             ),
-            {"strategy": strategy, "since": since_utc},
+            {"strategy": strategy, "since": since_local},
         ).scalar()
     return bool(count)
 

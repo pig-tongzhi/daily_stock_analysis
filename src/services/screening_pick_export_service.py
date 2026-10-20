@@ -31,7 +31,7 @@ from src.services.screening_tracking_service import (
     load_pick_rows,
 )
 from src.services.screening_tracking_service import _fetch_forward_bars
-from src.storage import DatabaseManager, ScreeningPick, utc_naive_now
+from src.storage import DatabaseManager, ScreeningPick, local_naive_now
 
 logger = logging.getLogger(__name__)
 
@@ -204,7 +204,7 @@ def materialize_screening_picks(
         db, [value for value in canonical_by_code.values() if value]
     )
 
-    now = utc_naive_now()
+    now = local_naive_now()
     with db.get_session() as session:
         for pick in deduped:
             canonical_id = canonical_by_code.get(str(pick["code"]))

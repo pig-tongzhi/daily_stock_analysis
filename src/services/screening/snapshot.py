@@ -398,8 +398,8 @@ def _parse_created_at(value: str) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed                      # naive 视为本地时间
+    return parsed.astimezone()             # 带时区 → 换算到本地
 
 
 def _fetch_efinance() -> pd.DataFrame:

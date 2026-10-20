@@ -146,8 +146,8 @@ def _parse_cache_datetime(value: Any) -> Optional[datetime]:
     except ValueError:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        return parsed                      # naive 视为本地时间
+    return parsed.astimezone()             # 带时区 → 换算到本地
 
 
 def _strip_hotspot_search_augmentation(payload: Dict[str, Any]) -> Dict[str, Any]:

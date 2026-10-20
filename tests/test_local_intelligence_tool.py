@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -45,7 +45,8 @@ def _seed(db, *, code="600519", title="贵州茅台获机构上调评级", scope
                 title=title,
                 summary="摘要",
                 url=f"https://example.com/{title}",
-                published_at=datetime(2026, 10, 9, 10, 0, 0),
+                # 用相对时间：工具默认只查最近 7 天，写死日期会随时间失效
+                published_at=datetime.now() - timedelta(days=1),
                 scope_type=scope,
                 scope_value=code,
                 market="cn",

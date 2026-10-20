@@ -38,8 +38,8 @@ from src.storage import (
     AnalysisHistory,
     DatabaseManager,
     DecisionSignalRecord,
-    to_utc_naive_datetime,
-    utc_naive_now,
+    to_local_naive_datetime,
+    local_naive_now,
 )
 from src.utils.data_processing import parse_json_field
 from src.utils.sanitize import sanitize_decision_signal_payload, sanitize_decision_signal_text
@@ -700,16 +700,10 @@ class DecisionSignalService:
     @staticmethod
     def _coerce_history_created_at_to_utc_naive(value: datetime) -> datetime:
         if value.tzinfo is not None:
-            return to_utc_naive_datetime(value)
+            return to_local_naive_datetime(value)
 
-        local_tz = datetime.now().astimezone().tzinfo
-        if local_tz is None or local_tz.utcoffset(value) is None:
-            return to_utc_naive_datetime(value)
-
-        try:
-            return value.replace(tzinfo=local_tz).astimezone(timezone.utc).replace(tzinfo=None)
-        except (OverflowError, OSError):
-            return to_utc_naive_datetime(value)
+        # 全库统一北京时间后：naive 一律视为本地，带时区的换算到本地
+        return to_local_naive_datetime(value)
 
     def _invalidate_history_bound_if_superseded(self, signal_id: int) -> None:
         row = self.repo.get(signal_id)
@@ -754,7 +748,7 @@ class DecisionSignalService:
         market: str,
         metadata: Any,
     ) -> Optional[datetime]:
-        base = to_utc_naive_datetime(created_at)
+        base = to_local_naive_datetime(created_at)
         return cls._expires_at_from_base(
             horizon=horizon,
             market=market,
@@ -897,7 +891,7 @@ class DecisionSignalService:
             horizon=horizon,
             market=market,
             metadata=metadata,
-            base=utc_naive_now(),
+            base=local_naive_now(),
         )
 
     @classmethod
@@ -992,8 +986,8 @@ class DecisionSignalService:
     ) -> bool:
         candidate_created_at = candidate.created_at
         if candidate_created_at is not None and reference_at is not None:
-            candidate_created_at = to_utc_naive_datetime(candidate_created_at)
-            reference_at = to_utc_naive_datetime(reference_at)
+            candidate_created_at = to_local_naive_datetime(candidate_created_at)
+            reference_at = to_local_naive_datetime(reference_at)
             if candidate_created_at != reference_at:
                 return candidate_created_at < reference_at
 
@@ -1019,7 +1013,7 @@ class DecisionSignalService:
         metadata.update({
             "invalidated_by_signal_id": invalidated_by.id,
             "invalidated_reason": f"opposite_active_signal:{row.action}->{invalidated_by.action}",
-            "invalidated_at": utc_naive_now().isoformat(),
+            "invalidated_at": local_naive_now().isoformat(),
             "previous_status": row.status,
         })
         if row.decision_profile is not None:
@@ -1280,7 +1274,7 @@ class DecisionSignalService:
         if value in (None, ""):
             return None
         if isinstance(value, datetime):
-            return to_utc_naive_datetime(value)
+            return to_local_naive_datetime(value)
         if isinstance(value, str):
             text = value.strip()
             if not text:
@@ -1289,13 +1283,13 @@ class DecisionSignalService:
                 parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
             except ValueError as exc:
                 raise ValueError(f"invalid datetime value: {value}") from exc
-            return to_utc_naive_datetime(parsed)
+            return to_local_naive_datetime(parsed)
         raise ValueError(f"invalid datetime value: {value}")
 
     @classmethod
     def _is_expired(cls, expires_at: Optional[datetime]) -> bool:
         normalized_expires_at = cls._parse_datetime(expires_at)
-        return normalized_expires_at is not None and normalized_expires_at <= utc_naive_now()
+        return normalized_expires_at is not None and normalized_expires_at <= local_naive_now()
 
     @staticmethod
     def _json_dumps(value: Any) -> Optional[str]:

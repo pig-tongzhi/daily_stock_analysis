@@ -123,6 +123,13 @@ def _payload(**overrides):
     return payload
 
 
+def _local_naive(iso: str) -> str:
+    """把任意带时区的 ISO 时间换算成本地 naive（与落库口径一致）。"""
+    from datetime import datetime as _dt
+
+    return _dt.fromisoformat(iso.replace("Z", "+00:00")).astimezone().replace(tzinfo=None).isoformat()
+
+
 def test_decision_signal_api_requires_session_when_admin_auth_enabled(tmp_path) -> None:
     old_env_file = os.environ.get("ENV_FILE")
     old_database_path = os.environ.get("DATABASE_PATH")
@@ -487,7 +494,9 @@ def test_create_accepts_timezone_aware_expires_at_values(client_and_db) -> None:
     assert expired_resp.status_code == 200, expired_resp.text
     expired_item = expired_resp.json()["item"]
     assert expired_item["status"] == "expired"
-    assert expired_item["expires_at"] == "2020-01-01T00:00:00"
+    # 2026-10-21 全库统一为北京时间：带时区的输入换算成**本地**再存，
+    # 这里用「同一瞬间换算到本地」来断言，避免把机器时区写死进测试。
+    assert expired_item["expires_at"] == _local_naive("2020-01-01T00:00:00Z")
 
     active_resp = client.post(
         "/api/v1/decision-signals",
@@ -500,7 +509,7 @@ def test_create_accepts_timezone_aware_expires_at_values(client_and_db) -> None:
     assert active_resp.status_code == 200, active_resp.text
     active_item = active_resp.json()["item"]
     assert active_item["status"] == "active"
-    assert active_item["expires_at"] == "2098-12-31T16:00:00"
+    assert active_item["expires_at"] == _local_naive("2099-01-01T00:00:00+08:00")
 
 
 def test_create_refreshes_expired_same_source_when_future_expiry_is_supplied(client_and_db) -> None:

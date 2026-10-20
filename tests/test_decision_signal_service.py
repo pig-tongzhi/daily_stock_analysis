@@ -315,7 +315,8 @@ def test_service_defaults_lifecycle_and_preserves_explicit_values(isolated_db) -
         )
     )["item"]
     assert explicit["horizon"] == "1d"
-    assert explicit["expires_at"] == "2099-01-01T00:00:00"
+    # 全库统一北京时间后，"2099-01-01T00:00:00Z" 落库为本地 08:00
+    assert explicit["expires_at"] == "2099-01-01T08:00:00"
 
     past = service.create_signal(
         _payload(

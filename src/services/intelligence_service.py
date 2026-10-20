@@ -845,7 +845,7 @@ class IntelligenceService:
             except ValueError:
                 return None
         if parsed.tzinfo is not None and parsed.utcoffset() is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            parsed = parsed.astimezone().replace(tzinfo=None)
         return parsed
 
     @classmethod

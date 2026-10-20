@@ -1488,8 +1488,8 @@ def _datetime_for_elapsed(value: Any) -> Optional[datetime]:
         return None
 
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        parsed = parsed.replace(tzinfo=_local_timezone())
-    return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed                      # naive 视为本地时间
+    return parsed.astimezone().replace(tzinfo=None)
 
 
 def _events_elapsed_ms(events: Iterable[Dict[str, Any]]) -> Optional[int]:

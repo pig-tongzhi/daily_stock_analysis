@@ -13,7 +13,7 @@ from src.storage import (
     DecisionSignalFeedbackRecord,
     DecisionSignalOutcomeRecord,
     DecisionSignalRecord,
-    utc_naive_now,
+    local_naive_now,
 )
 
 
@@ -108,7 +108,7 @@ class DecisionSignalOutcomeRepository:
             ).scalar_one_or_none()
 
     def upsert_outcome(self, fields: Dict[str, Any]) -> Tuple[DecisionSignalOutcomeRecord, bool]:
-        now = utc_naive_now()
+        now = local_naive_now()
         with self.db.get_session() as session:
             existing = session.execute(
                 select(DecisionSignalOutcomeRecord)
@@ -242,7 +242,7 @@ class DecisionSignalOutcomeRepository:
             return [str(code) for code in rows if code]
 
     def upsert_feedback(self, fields: Dict[str, Any]) -> DecisionSignalFeedbackRecord:
-        now = utc_naive_now()
+        now = local_naive_now()
         with self.db.get_session() as session:
             existing = session.execute(
                 select(DecisionSignalFeedbackRecord)

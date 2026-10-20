@@ -445,9 +445,12 @@ def test_create_and_list_normalize_aware_datetimes(isolated_db) -> None:
         )
     )
 
-    assert row.created_at == datetime(2026, 6, 8, 20, 0)
-    assert row.updated_at == datetime(2026, 6, 8, 20, 0)
-    assert row.expires_at == datetime(2098, 12, 31, 16, 0)
+    # 2026-10-21 全库统一北京时间：带时区输入换算到本地再存
+    # 输入 2026-06-08 20:00 UTC  →  本地 2026-06-09 04:00
+    assert row.created_at == datetime(2026, 6, 9, 4, 0)
+    assert row.updated_at == datetime(2026, 6, 9, 4, 0)
+    # 输入 2099-01-01 00:00+08:00 →  已经是本地，原样
+    assert row.expires_at == datetime(2099, 1, 1, 0, 0)
     assert row.created_at.tzinfo is None
     assert row.updated_at.tzinfo is None
     assert row.expires_at.tzinfo is None

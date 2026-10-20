@@ -214,13 +214,13 @@ def _format_item_time(value: object) -> str:
             timestamp = float(value)
             if timestamp > 10_000_000_000:
                 timestamp = timestamp / 1000
-            parsed = datetime.fromtimestamp(timestamp, tz=timezone.utc).replace(tzinfo=None)
+            parsed = datetime.fromtimestamp(timestamp)
         else:
             parsed = _parse_text_datetime(safe_text(value, max_len=64))
         if parsed is None:
             return ""
         if parsed.tzinfo is not None and parsed.utcoffset() is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            parsed = parsed.astimezone().replace(tzinfo=None)
         return parsed.strftime("%Y-%m-%d %H:%M")
     except Exception:  # noqa: BLE001 - odd stored timestamps must never break screening
         return ""

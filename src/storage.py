@@ -73,16 +73,29 @@ if TYPE_CHECKING:
     from src.search_service import SearchResponse
 
 
-def utc_naive_now() -> datetime:
-    """Return current UTC time without tzinfo for SQLite DateTime columns."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def local_naive_now() -> datetime:
+    """项目统一时间基准：**北京时间**（本地 naive）。
+
+    历史背景（2026-10-21 全库统一）：
+      2026-02 项目最初用 datetime.now（本地）；
+      2026-06 引入 utc_naive_now 但只用于新表，旧表未迁移；
+      结果 6 张表 UTC、15 张表本地，跨表比较会差 8 小时且静默出错。
+    现在统一为本地时间 —— 本项目只在北京时区运行，无夏令时，
+    “本地”就是唯一正确且对人直观的基准。
+    """
+    return datetime.now()
 
 
-def to_utc_naive_datetime(value: datetime) -> datetime:
-    """Normalize aware datetimes to UTC-naive; treat naive values as UTC-naive."""
+def to_local_naive_datetime(value: datetime) -> datetime:
+    """把带时区的时间转成本地 naive；naive 一律视为已经是本地时间。"""
     if value.tzinfo is not None and value.utcoffset() is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.astimezone().replace(tzinfo=None)
     return value
+
+
+# 兼容别名：旧名字保留，但语义已改为本地时间（不再有 UTC 含义）
+utc_naive_now = local_naive_now
+to_utc_naive_datetime = to_local_naive_datetime
 
 
 # === 数据模型定义 ===
