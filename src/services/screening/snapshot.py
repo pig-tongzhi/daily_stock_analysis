@@ -37,6 +37,21 @@ _WIND_BATCH_SIZE = 100
 _WIND_MAX_WORKERS = 6
 _WIND_BATCH_TIMEOUT = 180
 _WIND_BATCH_RETRIES = 3
+
+
+class WindQuotaExhausted(RuntimeError):
+    """Wind 当日调用额度已用完。
+
+    Wind 用 HTTP 200 + body 里的 code=429 表达这个错误，且明确写着
+    "重试无法恢复额度，额度将于次日 0 点重置"。所以遇到它必须立刻放弃
+    并把 Wind 标记为"今日不可用"，否则 56 个批次每个重试 3 次、退避
+    2/4/8 秒，白白多等十几分钟。
+    """
+
+
+# 进程级：一旦确认配额耗尽，本进程内不再尝试 Wind（服务每天都会重启，
+# 跨天自动失效）。value 是记录时的 monotonic 时间，仅用于日志。
+_WIND_QUOTA_EXHAUSTED_AT: float | None = None
 # 只取这 22 个指标（Wind 单次可返回 34 个，多取会显著变慢）
 _WIND_INDEXES = (
     "最新交易日,交易时间,中文简称,最新成交价,前收盘价,今日开盘价,今日最高价,今日最低价,"
@@ -626,6 +641,19 @@ def _enrich_classification(df: pd.DataFrame, *, source: str) -> pd.DataFrame:
     return df
 
 
+def _mark_wind_quota_exhausted() -> None:
+    global _WIND_QUOTA_EXHAUSTED_AT
+    if _WIND_QUOTA_EXHAUSTED_AT is None:
+        _WIND_QUOTA_EXHAUSTED_AT = time.monotonic()
+        logger.warning(
+            "[Snapshot] Wind 当日额度已耗尽，今天剩余时间不再尝试（次日 0 点重置）"
+        )
+
+
+def _wind_quota_exhausted() -> bool:
+    return _WIND_QUOTA_EXHAUSTED_AT is not None
+
+
 def _wind_token() -> str:
     """读 Wind MCP 密钥。只从环境变量读，绝不硬编码进仓库。"""
     for key in ("WIND_MCP_TOKEN", "WIND_TOKEN", "WIND_API_KEY"):
@@ -658,6 +686,14 @@ def _wind_parse_sse(text: str) -> dict:
     会被拆成多行 `data:`。只取最后一行会把 JSON 截断
     （表现为 "Unterminated string starting at …"）。
     """
+    # 正常结果走 SSE（event:/data: 分帧），但错误响应（例如配额耗尽的 429）
+    # 会直接回一段纯 JSON —— 先尝试整体解析，避免把 429 误判成"解析失败"。
+    stripped = text.strip()
+    if stripped.startswith("{") and "data:" not in stripped:
+        message = json.loads(stripped)
+        if isinstance(message, dict) and ("result" in message or "error" in message):
+            return _check_wind_message(message)
+
     events: list[list[str]] = []
     current: list[str] = []
     for line in text.splitlines():
@@ -687,14 +723,20 @@ def _wind_parse_sse(text: str) -> dict:
             break
     if message is None:
         raise RuntimeError("wind: no json-rpc message in sse response")
+    return _check_wind_message(message)
+
+
+def _check_wind_message(message: dict) -> dict:
     if message.get("error"):
         raise RuntimeError(f"wind rpc error: {message['error']}")
     result = message.get("result") or {}
     if result.get("isError"):
         structured = result.get("structuredContent") or {}
-        raise RuntimeError(
-            f"wind tool error: {structured.get('message') or result.get('content')}"
-        )
+        message = structured.get("message") or result.get("content")
+        code = structured.get("code")
+        if code == 429 or "当日调用次数已达上限" in str(message or ""):
+            raise WindQuotaExhausted(f"wind quota exhausted (code={code}): {message}")
+        raise RuntimeError(f"wind tool error (code={code}): {message}")
     content = result.get("content") or []
     if not content:
         return {}
@@ -752,6 +794,10 @@ def _wind_call_batch(windcodes: list[str], token: str) -> list[dict]:
                     mapped["wind_code"] = raw_code
                     out.append(mapped)
             return out
+        except WindQuotaExhausted as exc:
+            # 配额类错误重试无意义（Wind 自己说的），直接向上抛。
+            _mark_wind_quota_exhausted()
+            raise
         except Exception as exc:  # noqa: BLE001 - 批级重试
             last_error = exc
             _record_source_failure("wind", f"batch attempt {attempt}: {exc}")
@@ -771,6 +817,8 @@ def _fetch_wind() -> pd.DataFrame:
     """
     from concurrent.futures import ThreadPoolExecutor
 
+    if _wind_quota_exhausted():
+        raise WindQuotaExhausted("wind quota already exhausted today")
     token = _wind_token()
     if not token:
         raise RuntimeError("wind requires WIND_MCP_TOKEN")
@@ -790,11 +838,20 @@ def _fetch_wind() -> pd.DataFrame:
     errors: list[str] = []
     with ThreadPoolExecutor(max_workers=_WIND_MAX_WORKERS) as executor:
         futures = [executor.submit(_wind_call_batch, batch, token) for batch in batches]
+        quota_hit = False
         for future in futures:
             try:
                 records.extend(future.result())
+            except WindQuotaExhausted:
+                # 配额耗尽：其余批次必然同样失败，立刻收手
+                quota_hit = True
+                break
             except Exception as exc:  # noqa: BLE001 - 单批失败不致命
                 errors.append(f"wind batch: {exc}")
+        if quota_hit:
+            for future in futures:
+                future.cancel()
+            raise WindQuotaExhausted("wind quota exhausted mid-run")
 
     if not records:
         raise RuntimeError(f"wind returned no rows (errors={len(errors)})")
