@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -244,33 +244,66 @@ def test_tick_isolates_single_strategy_failure(monkeypatch, memory_db):
 
 
 def test_screening_ran_since_uses_database(memory_db):
-    """去重查库：时间点之前的记录不算，之后的才算。"""
-    from datetime import datetime as dt
+    """去重查库：created_at 是 UTC-naive，since 是本地时间，必须换算后再比。
 
+    回归背景：两者混用会让 UTC 的 07:32 永远小于本地的 15:30，
+    于是每轮都判"今天还没跑"，同一策略重复跑（2026-10-20 实测 4 轮）。
+    这里用 +08:00 的本地时刻做断言，钉住"本地 15:30 == UTC 07:30"这条换算。
+    """
+    from datetime import datetime as dt, timezone
+
+    LOCAL_TZ = timezone(timedelta(hours=8))
     with memory_db._engine.begin() as conn:
         conn.execute(
             text(
                 "INSERT INTO screening_runs "
                 "(run_id, strategy, market, candidate_count, result_json, created_at) "
-                "VALUES ('run-early', 'dual_low', 'cn', 1, '{}', '2026-10-16 09:00:00')"
+                "VALUES ('run-early', 'dual_low', 'cn', 1, '{}', '2026-10-16 07:30:00')"
             )
         )
 
+    # 本地 07:00（= UTC 前一日 23:00）→ 早于那条 UTC 07:30 的记录 → 算"跑过"
     assert (
         runtime_scheduler._screening_ran_since(
-            "dual_low", dt(2026, 10, 16, 15, 20, 0)
-        )
-        is False
-    )
-    assert (
-        runtime_scheduler._screening_ran_since(
-            "dual_low", dt(2026, 10, 16, 8, 0, 0)
+            "dual_low", dt(2026, 10, 16, 7, 0, 0, tzinfo=LOCAL_TZ)
         )
         is True
     )
+    # 本地 16:00（= UTC 08:00）→ 晚于那条记录 → 算"没跑过"
     assert (
         runtime_scheduler._screening_ran_since(
-            "quality_value", dt(2026, 10, 16, 8, 0, 0)
+            "dual_low", dt(2026, 10, 16, 16, 0, 0, tzinfo=LOCAL_TZ)
         )
         is False
     )
+    # 别的策略从未写过 → 永远算"没跑过"
+    assert (
+        runtime_scheduler._screening_ran_since(
+            "quality_value", dt(2026, 10, 16, 7, 0, 0, tzinfo=LOCAL_TZ)
+        )
+        is False
+    )
+
+
+def test_screening_ran_since_naive_since_is_treated_as_local(memory_db):
+    """调度器传进来的是 naive 本地时间（datetime.now()），必须等价于带 +08:00。
+
+    这条钉住"naive 必须按本地解释"，否则 astimezone() 在 UTC 容器里会算错。
+    """
+    from datetime import datetime as dt, timezone
+
+    LOCAL_TZ = timezone(timedelta(hours=8))
+    with memory_db._engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO screening_runs "
+                "(run_id, strategy, market, candidate_count, result_json, created_at) "
+                "VALUES ('run-x', 'dual_low', 'cn', 1, '{}', '2026-10-16 07:30:00')"
+            )
+        )
+
+    naive = dt(2026, 10, 16, 16, 0, 0)          # 本地 16:00，不带 tzinfo
+    aware = naive.replace(tzinfo=LOCAL_TZ)
+    assert runtime_scheduler._screening_ran_since(
+        "dual_low", naive
+    ) == runtime_scheduler._screening_ran_since("dual_low", aware)

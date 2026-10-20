@@ -11,7 +11,7 @@ import subprocess
 import threading
 import _thread
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from functools import partial
 from queue import Empty
 from types import SimpleNamespace
@@ -605,6 +605,13 @@ def _screening_ran_since(strategy: str, since: datetime) -> bool:
 
     from src.storage import DatabaseManager
 
+    # screening_runs.created_at 存的是 UTC-naive（见 storage.utc_naive_now），
+    # 而 since 是从 "现在" 推出来的本地 naive 时间。不转换就会把 15:30 本地
+    # 当成 15:30 UTC 去比，UTC 的 07:32 永远小于它 → 每轮都判"今天还没跑"
+    # → 同一策略被重复跑（2026-10-20 实测 4 轮，耗时翻 4 倍，导出拖到 17:32，
+    #   晚于本机 17:15 的拉取动作，当天日报直接拿不到数据）。
+    since_utc = since.astimezone(timezone.utc).replace(tzinfo=None)
+
     db = DatabaseManager.get_instance()
     with db.get_session() as session:
         count = session.execute(
@@ -612,7 +619,7 @@ def _screening_ran_since(strategy: str, since: datetime) -> bool:
                 "SELECT COUNT(*) FROM screening_runs "
                 "WHERE strategy = :strategy AND created_at >= :since"
             ),
-            {"strategy": strategy, "since": since},
+            {"strategy": strategy, "since": since_utc},
         ).scalar()
     return bool(count)
 
