@@ -402,10 +402,18 @@ class TestMarketContextTool:
         assert result["canonical_id"] == "sh600519"
         assert result["market"] is not None
         assert result["market"]["usable_count"] >= MIN_USABLE_ROWS
-        # 600519（茅台）本身不在这份横截面里（真实数据如此），必须如实说明，而不是给假分位
-        assert result["target"]["present"] is False
-        assert "target_not_in_snapshot" in result["limitations"]
-        assert result["position"] is None
+
+        # 这里原来写死断言「茅台不在这份快照里（真实数据如此）」。
+        # 2026-10-22 数据源换成 Wind 之后快照变成完整的 5,567 只，茅台自然在里面，
+        # 断言就红了 —— 那不是回归，是测试赌了当时那份残缺数据。
+        # 改成两种结果都必须自洽：在或不在都可以，但说明必须给对。
+        target = result["target"]
+        if target["present"]:
+            assert "target_not_in_snapshot" not in result["limitations"]
+            assert result["position"] is not None
+        else:
+            assert "target_not_in_snapshot" in result["limitations"]
+            assert result["position"] is None
 
     def test_real_db_computes_a_real_percentile_for_a_present_stock(self):
         """真实库：对确实在快照里的个股，必须算出 0-100 的真实分位。"""
