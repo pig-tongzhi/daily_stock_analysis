@@ -186,7 +186,10 @@ def save_market_snapshot(
         logger.warning(
             "[MarketSnapshot] 数据源未提供数据日，退回运行日 %s（来源=%s）", day, source
         )
-    now = datetime.now(timezone.utc).isoformat()
+    # 全库时间基准是"北京本地 naive"。这里曾用 UTC ISO（带 +00:00 后缀），
+    # 导致 market_snapshot.created_at 是全库唯一一个 UTC 时间戳，
+    # 和其它表没法直接比较（2026-10-21 审计发现）。
+    now = datetime.now().isoformat()
 
     # 注意：不能用 `getattr(df, "columns", []) or []` —— pandas.Index 的真值
     # 是未定义的，会抛 "truth value of a Index is ambiguous"。直接 set() 即可。

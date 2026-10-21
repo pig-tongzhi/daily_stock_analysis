@@ -1284,7 +1284,9 @@ def snapshot_trade_date(df: pd.DataFrame) -> date | None:
         return None
     raw = getattr(df, "attrs", {}).get("trade_date")
     if not raw:
-        return None
+        # 新浪/缓存不提供数据日。此时不能退到"运行日"（凌晨跑会把前一天的
+        # 行情标成今天），改为按交易日历推断"最近一个已收盘交易日"。
+        return _infer_recent_trade_date(df)
     text = str(raw).strip().replace("-", "").replace("/", "")[:8]
     if len(text) == 8 and text.isdigit():
         try:
@@ -1292,6 +1294,42 @@ def snapshot_trade_date(df: pd.DataFrame) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _infer_recent_trade_date(df: pd.DataFrame) -> date | None:
+    """按交易日历推断数据日：最近一个已收盘的交易日。
+
+    只在数据源没有明确给出数据日时使用（新浪、last_good_cache）。判据：
+      · 交易日且当前时间 >= 15:05 → 今天
+      · 否则 → 往前找最近一个交易日
+    15:05 留了 5 分钟余量，避免收盘瞬间拿到盘中数据却标成当日收盘。
+    """
+    try:
+        from src.services.screening.calendar import trading_days  # type: ignore
+
+        days = trading_days()
+    except Exception:
+        days = None
+
+    now = datetime.now()
+    today = now.date()
+    cutoff_hhmm = "15:05"
+    if days:
+        candidates = sorted(d for d in days if d <= today)
+        if not candidates:
+            return None
+        if candidates[-1] == today and now.strftime("%H:%M") >= cutoff_hhmm:
+            return today
+        return candidates[-1] if candidates[-1] != today else (
+            candidates[-2] if len(candidates) > 1 else today
+        )
+    # 没有交易日历时，用工作日近似（不判节假日，至少不会差一整天）
+    probe = today
+    if probe.weekday() >= 5 or now.strftime("%H:%M") < cutoff_hhmm:
+        probe = probe - timedelta(days=1)
+    while probe.weekday() >= 5:
+        probe = probe - timedelta(days=1)
+    return probe
 
 
 def _normalize(df: pd.DataFrame, source: str) -> pd.DataFrame:

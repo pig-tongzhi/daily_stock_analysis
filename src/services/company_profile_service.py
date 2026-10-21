@@ -123,7 +123,7 @@ def sync_from_snapshots(*, code: Optional[str] = None) -> Tuple[int, int]:
     sql += " ORDER BY id"
 
     profiles = metrics = 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now().isoformat()
     try:
         with engine.begin() as conn:
             rows = conn.execute(text(sql), params).fetchall()

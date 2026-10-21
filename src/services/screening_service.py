@@ -105,7 +105,8 @@ def _safe_float(value: Any) -> Optional[float]:
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    """返回本地时间 ISO 字符串。名字保留（调用点很多），语义已改为本地。"""
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def _resolve_screening_data_dir() -> Path:

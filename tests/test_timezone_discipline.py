@@ -29,18 +29,22 @@ TESTS = REPO / "tests"
 # 只放"外部契约必须有 UTC"的地方：这些 ISO 字符串会交给 LLM provider / 外部
 # 报表，带明确偏移量，不会与库里的本地时间混比。
 # 新增条目必须在同一行写 `# tz-ok: <理由>`，否则测试会拒绝。
+# 只保留「必须用 UTC」的文件：
+#   data_capability_service — 立刻 astimezone() 转本地，实际输出是本地
+#   search_service          — 按 dt.tzinfo 分支，两种都处理
+#   core/pipeline           — 内部恢复基准，不落库
+#   screening/snapshot      — 缓存文件元数据，解析时统一换算成本地
+#   screening/hotspot       — 板块热度缓存元数据，同上
+#   schemas/analysis_*      — 纯序列化，不参与比较
+# 其余凡是「写进数据库」的都已改成北京时间（2026-10-21 审计）。
 UTC_NOW_ALLOW = {
-    "src/llm/usage.py",
-    "src/schemas/analysis_context_pack.py",
-    "src/services/company_profile_service.py",
-    "src/services/data_inventory_service.py",
     "src/services/data_capability_service.py",
-    "src/services/market_snapshot_service.py",
-    "src/services/screening/hotspot.py",
-    "src/services/screening/snapshot.py",
-    "src/services/screening_service.py",
-    "src/core/pipeline.py",
     "src/search_service.py",
+    "src/core/pipeline.py",
+    "src/services/screening/snapshot.py",
+    "src/services/screening/hotspot.py",
+    "src/schemas/analysis_context_pack.py",
+    "src/services/data_inventory_service.py",
 }
 
 _UTC_PATTERNS = (

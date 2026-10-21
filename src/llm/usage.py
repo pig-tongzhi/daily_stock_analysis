@@ -282,7 +282,7 @@ def normalize_litellm_usage(
     usage = _to_plain(usage_obj)
     provider_name = _infer_provider(model, provider)
     raw_json = _safe_provider_usage_json(usage)
-    observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    observed_at = datetime.now().isoformat(timespec="seconds")
 
     result: Dict[str, Any] = {
         "prompt_tokens": 0,
