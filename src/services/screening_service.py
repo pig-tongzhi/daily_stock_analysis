@@ -48,8 +48,21 @@ DSA_PRE_RANK_CONTEXT_MAX_CANDIDATES = 3
 DSA_SCREENING_LLM_CANDIDATE_MULTIPLIER = 2
 DSA_SCREENING_LLM_MAX_CANDIDATES = 12
 DSA_SCREENING_DAILY_FETCH_RETRIES = 3
-DSA_SCREENING_SNAPSHOT_SOURCE_PRIORITY = "sina,efinance,akshare_em,em_datacenter"
-DSA_SCREENING_SNAPSHOT_SOURCE_PRIORITY_WITH_TUSHARE = "tushare,sina,efinance,akshare_em,em_datacenter"
+# 唯一真源：screening/config.py 的 DEFAULT_SNAPSHOT_SOURCE_PRIORITY。
+# 这里原来是硬编码的 "sina,efinance,akshare_em,em_datacenter" —— 2026-10-21 重建时
+# 只改了 config.py，结果 put_default() 又用这份旧列表覆盖了环境变量，Wind 从头到尾
+# 没被尝试过（当天 15:32 直接走了新浪）。两份清单必须只留一份。
+def _dsa_snapshot_priority_csv(*, with_tushare: bool) -> str:
+    from src.services.screening.config import (
+        DEFAULT_SNAPSHOT_SOURCE_PRIORITY,
+        TUSHARE_FIRST_SOURCE_PRIORITY,
+    )
+
+    return ",".join(TUSHARE_FIRST_SOURCE_PRIORITY if with_tushare else DEFAULT_SNAPSHOT_SOURCE_PRIORITY)
+
+
+DSA_SCREENING_SNAPSHOT_SOURCE_PRIORITY = _dsa_snapshot_priority_csv(with_tushare=False)
+DSA_SCREENING_SNAPSHOT_SOURCE_PRIORITY_WITH_TUSHARE = _dsa_snapshot_priority_csv(with_tushare=True)
 DSA_SCREENING_CANDIDATE_CONTEXT_PROVIDERS = "news,fund_flow,announcement,quote"
 DSA_SCREENING_DATA_DIR = Path("data") / "screening"
 DSA_SCREENING_HOTSPOT_CACHE_PATH = DSA_SCREENING_DATA_DIR / "hotspots.json"
@@ -1897,9 +1910,7 @@ def _build_screening_dsa_daily_history_fetcher() -> Optional[Callable[..., Any]]
 
 def _resolve_screening_snapshot_source_priority(config: Config) -> str:
     token = _env_text(getattr(config, "tushare_token", None) or os.getenv("TUSHARE_TOKEN"))
-    if token:
-        return DSA_SCREENING_SNAPSHOT_SOURCE_PRIORITY_WITH_TUSHARE
-    return DSA_SCREENING_SNAPSHOT_SOURCE_PRIORITY
+    return _dsa_snapshot_priority_csv(with_tushare=bool(token))
 
 
 def _build_screening_runtime_env(config: Config, *, max_results: Optional[int] = None) -> Dict[str, str]:
