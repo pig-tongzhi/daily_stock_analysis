@@ -49,9 +49,12 @@ class WindQuotaExhausted(RuntimeError):
     """
 
 
-# 进程级：一旦确认配额耗尽，本进程内不再尝试 Wind（服务每天都会重启，
-# 跨天自动失效）。value 是记录时的 monotonic 时间，仅用于日志。
+# 一旦确认配额耗尽，在【当天】内不再尝试 Wind。
+# 注意不能只用"进程内标记"：服务是常驻的（systemd 不会每天重启），
+# Wind 的额度是 0 点重置，所以必须按自然日失效，否则跨天后 Wind 永远
+# 不会被再次尝试。
 _WIND_QUOTA_EXHAUSTED_AT: float | None = None
+_WIND_QUOTA_EXHAUSTED_DATE: date | None = None
 # 只取这 22 个指标（Wind 单次可返回 34 个，多取会显著变慢）
 _WIND_INDEXES = (
     "最新交易日,交易时间,中文简称,最新成交价,前收盘价,今日开盘价,今日最高价,今日最低价,"
@@ -642,16 +645,27 @@ def _enrich_classification(df: pd.DataFrame, *, source: str) -> pd.DataFrame:
 
 
 def _mark_wind_quota_exhausted() -> None:
-    global _WIND_QUOTA_EXHAUSTED_AT
-    if _WIND_QUOTA_EXHAUSTED_AT is None:
+    global _WIND_QUOTA_EXHAUSTED_AT, _WIND_QUOTA_EXHAUSTED_DATE
+    today = datetime.now().date()
+    if _WIND_QUOTA_EXHAUSTED_DATE != today:
         _WIND_QUOTA_EXHAUSTED_AT = time.monotonic()
+        _WIND_QUOTA_EXHAUSTED_DATE = today
         logger.warning(
-            "[Snapshot] Wind 当日额度已耗尽，今天剩余时间不再尝试（次日 0 点重置）"
+            "[Snapshot] Wind 当日额度已耗尽（%s），今天不再尝试（次日 0 点重置）", today
         )
 
 
 def _wind_quota_exhausted() -> bool:
-    return _WIND_QUOTA_EXHAUSTED_AT is not None
+    """今天是否已经确认 Wind 额度耗尽。跨自然日自动失效。"""
+    global _WIND_QUOTA_EXHAUSTED_AT, _WIND_QUOTA_EXHAUSTED_DATE
+    if _WIND_QUOTA_EXHAUSTED_DATE is None:
+        return False
+    if _WIND_QUOTA_EXHAUSTED_DATE != datetime.now().date():
+        # 跨天了：Wind 额度已在 0 点重置，恢复尝试。
+        _WIND_QUOTA_EXHAUSTED_AT = None
+        _WIND_QUOTA_EXHAUSTED_DATE = None
+        return False
+    return True
 
 
 def _wind_token() -> str:
