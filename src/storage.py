@@ -2865,6 +2865,111 @@ class DatabaseManager(metaclass=_DatabaseManagerMeta):
             except Exception:
                 return None
 
+    def save_screening_candidates(
+        self, *, as_of, run_id: str, strategy: str, rows: list
+    ) -> int:
+        """把候选池（约 100 只）连同技术因子与淘汰判定写入 screening_candidates。
+
+        为什么单独一张表：技术因子只对候选算，塞进 market_snapshot（5575 只）
+        会让 99% 的格子是 NULL；而且这张表要回答"为什么没选它"。
+        幂等：同一 (as_of, run_id, code) 覆盖。
+        """
+        if not rows or not run_id:
+            return 0
+        # as_of 传进来可能是 "2026-10-21" 字符串；SQLite 的 Date 列只接受
+        # date 对象，直接塞字符串会报 "SQLite Date type only accepts Python
+        # date objects as input"（2026-10-22 实测）。
+        if isinstance(as_of, str):
+            try:
+                as_of = datetime.fromisoformat(as_of[:10]).date()
+            except ValueError:
+                return 0
+        if not isinstance(as_of, date):
+            return 0
+        now = datetime.now()
+
+        def _f(v):
+            try:
+                if v is None or v == "" or v != v:      # NaN 检查
+                    return None
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        def _b(v):
+            if v is None or v == "" or v != v:
+                return None
+            try:
+                return bool(v)
+            except Exception:
+                return None
+
+        def _s(v, n=64):
+            text = str(v).strip() if v is not None else ""
+            return text[:n] or None
+
+        values = []
+        for r in rows:
+            code = str(r.get("code") or "").strip()
+            if not code:
+                continue
+            values.append({
+                "as_of": as_of, "run_id": run_id, "strategy": strategy,
+                "code": code, "name": _s(r.get("name")),
+                "price": _f(r.get("price")), "change_pct": _f(r.get("change_pct")),
+                "amount": _f(r.get("amount")), "total_mv": _f(r.get("total_mv")),
+                "circ_mv": _f(r.get("circ_mv")),
+                "pe_ttm": _f(r.get("pe_ttm") if r.get("pe_ttm") is not None else r.get("pe_ratio")),
+                "pb_ratio": _f(r.get("pb_ratio")),
+                "turnover_rate": _f(r.get("turnover_rate")),
+                "volume_ratio": _f(r.get("volume_ratio")),
+                "ma5": _f(r.get("ma5")), "ma10": _f(r.get("ma10")),
+                "ma20": _f(r.get("ma20")), "ma60": _f(r.get("ma60")),
+                "above_ma20": _b(r.get("above_ma20")),
+                "ma_bullish": _b(r.get("ma_bullish")),
+                "macd_status": _s(r.get("macd_status"), 16),
+                "atr_20_pct": _f(r.get("atr_20_pct")),
+                "volatility_20d": _f(r.get("volatility_20d")),
+                "max_drawdown_20d": _f(r.get("max_drawdown_20d")),
+                "range_20d_pct": _f(r.get("range_20d_pct")),
+                "breakout_20d_pct": _f(r.get("breakout_20d_pct")),
+                "pullback_ma20_pct": _f(r.get("pullback_ma20_pct")),
+                "consolidation_days": int(r["consolidation_days"])
+                    if isinstance(r.get("consolidation_days"), (int, float)) else None,
+                "body_pct": _f(r.get("body_pct")),
+                "change_60d": _f(r.get("change_60d")),
+                "volume_ratio_20d": _f(r.get("volume_ratio_20d")),
+                "signal_score": _f(r.get("signal_score")),
+                "passed": _b(r.get("passed")),
+                "reject_reason": _s(r.get("reject_reason"), 128),
+                "created_at": now,
+            })
+        if not values:
+            return 0
+        try:
+            def _write(session: Session) -> int:
+                for chunk_start in range(0, len(values), 500):
+                    chunk = values[chunk_start:chunk_start + 500]
+                    for v in chunk:
+                        row = session.execute(
+                            select(ScreeningCandidate).where(
+                                ScreeningCandidate.as_of == v["as_of"],
+                                ScreeningCandidate.run_id == v["run_id"],
+                                ScreeningCandidate.code == v["code"],
+                            )
+                        ).scalar_one_or_none()
+                        if row is None:
+                            session.add(ScreeningCandidate(**v))
+                        else:
+                            for k, val in v.items():
+                                setattr(row, k, val)
+                return len(values)
+
+            return self._run_write_transaction(f"save_candidates[{run_id}]", _write)
+        except Exception as exc:
+            logger.warning("候选池写入失败（fail-open）: run_id=%s err=%s", run_id, exc)
+            return 0
+
     def save_screening_run(self, payload: Dict[str, Any]) -> int:
         """Persist one completed screening response without blocking screening on DB errors."""
         run_id = str(payload.get("run_id") or "").strip()

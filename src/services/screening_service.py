@@ -1341,9 +1341,30 @@ class ScreeningService:
             # 补跑会把前一天的行情标成今天）。
             "snapshot_trade_date": raw_data.get("snapshot_trade_date"),
             "snapshot_source": raw_data.get("snapshot_source"),
+            # 候选池（约 100 只）：进了候选但没被选中的票 + 淘汰原因。
+            # 不放进 result_json（太大），只用于写 screening_candidates 表。
+            "candidate_rows": raw_data.get("candidate_rows") or [],
         }
         if self.db_manager is not None:
-            self.db_manager.save_screening_run(response)
+                # result_json 存整份 response，但候选池太大（~100 行 × 30 字段），
+            # 单独进 screening_candidates 表，不进 JSON。
+            _run_payload = {k: v for k, v in response.items() if k != "candidate_rows"}
+            self.db_manager.save_screening_run(_run_payload)
+            # 候选池（约 100 只）连同技术因子与淘汰判定一起落库，
+            # 用来回答"为什么没选它"。失败不影响选股本身。
+            try:
+                _as_of = response.get("snapshot_trade_date") or datetime.now().date().isoformat()
+                # 注意：这里不能用 _list_text_values —— 那是把值转成字符串列表
+                # 用的，候选行是 dict，过一遍会变成空列表（2026-10-22 实测写入 0 行）。
+                _rows = response.get("candidate_rows")
+                self.db_manager.save_screening_candidates(
+                    as_of=_as_of,
+                    run_id=str(response.get("run_id") or ""),
+                    strategy=str(response.get("strategy") or ""),
+                    rows=_rows if isinstance(_rows, list) else [],
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[ScreeningService] 候选池写入跳过: %s", exc)
         else:
             # fail-loud：绝不静默丢弃选股运行记录。
             # 历史 bug：调用点漏传 db_manager → 这里静默跳过 → screening_runs 长期为空

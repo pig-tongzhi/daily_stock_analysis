@@ -357,6 +357,36 @@ def screen(
     # 6. Build Pick list
     picks = _df_to_picks(df_top)
 
+    # 6.1 候选池快照：进了候选但没被选中的票也要留档。
+    # 日报只能回答"选了哪 5 只"，回答不了"为什么没选另外 95 只" ——
+    # 正是这份数据让"为什么淘汰"可查。只取精简字段，避免把整张
+    # DataFrame（含概念/新闻上下文）塞进 result_json。
+    picked_codes = {str(p.code).strip() for p in picks}
+    try:
+        _cand_cols = [
+            "code", "name", "price", "change_pct", "amount", "total_mv", "circ_mv",
+            "pe_ttm", "pe_ratio", "pb_ratio", "turnover_rate", "volume_ratio",
+            "ma5", "ma10", "ma20", "ma60", "above_ma20", "ma_bullish", "macd_status",
+            "atr_20_pct", "volatility_20d", "max_drawdown_20d", "range_20d_pct",
+            "breakout_20d_pct", "pullback_ma20_pct", "consolidation_days",
+            "body_pct", "change_60d", "volume_ratio_20d", "signal_score",
+        ]
+        _present = [c for c in _cand_cols if c in df.columns]
+        candidate_rows = []
+        for record in df.head(config.daily_enrich_max_candidates or 100).to_dict("records"):
+            code = str(record.get("code") or "").strip()
+            if not code:
+                continue
+            row = {c: record.get(c) for c in _present}
+            row["code"] = code
+            row["passed"] = code in picked_codes
+            if not row["passed"]:
+                row["reject_reason"] = "未进入 LLM 排序前 %d 名" % top_k
+            candidate_rows.append(row)
+    except Exception as exc:  # noqa: BLE001 - 候选留档失败不影响选股
+        candidate_rows = []
+        degradation.append(f"candidate snapshot skipped: {exc}")
+
     # 6.5. Host-provided candidate context, e.g. DSA realtime quote,
     # fundamentals, and news. This runs before LLM ranking so L2 can use it.
     _emit_progress(progress_callback, 52, "正在补充候选行情与基本面")
@@ -609,6 +639,7 @@ def screen(
         degradation=degradation,
         snapshot_source=snapshot_source,
         snapshot_trade_date=_trade_date_text,
+        candidate_rows=candidate_rows,
         source_errors=source_errors,
         deep_analysis_requested=("dsa" in analyzer_names),
         post_analyzers=analyzer_names,

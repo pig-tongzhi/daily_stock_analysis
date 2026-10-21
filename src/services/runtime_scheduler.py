@@ -657,6 +657,42 @@ def _materialize_and_export_screening_picks(config: Config) -> None:
         logger.exception("[ScreeningSchedule] 物化/导出选股明细失败")
 
 
+# 单个策略的硬超时（秒）。实测：正常策略 0.8~8 分钟；出现过
+# shrink_pullback 单次 8.2 分钟、low_volatility_quality 6.8 分钟。
+# 10 个策略串行，任何一个挂住（不是报错而是卡死）都会把整轮拖延到
+# 研判链（16:30）和日报（17:15）拿不到数据。给 15 分钟上限：
+# 超时按失败处理（配合失败落库，去重能看见），然后继续下一个策略。
+_STRATEGY_TIMEOUT_SEC = float(os.getenv("SCREENING_STRATEGY_TIMEOUT_SEC", "900"))
+
+
+def _screen_with_timeout(service, *, strategy: str, market: str, max_results: int, timeout: float):
+    """在子线程里跑策略，超时就让主流程继续。
+
+    为什么用线程而不是信号：调度器本身就跑在后台线程里，signal 只在主线程可用。
+    超时后子线程无法强杀（Python 没有安全的 kill），它会继续跑完但在结果被丢弃；
+    相比"整轮卡死"，泄漏一个线程是可接受的代价。
+    """
+    box = {}
+
+    def _run():
+        try:
+            box["result"] = service.screen(
+                strategy=strategy, market=market, max_results=max_results
+            )
+        except Exception as exc:  # noqa: BLE001 - 交给上面统一处理
+            box["error"] = exc
+
+    worker = threading.Thread(target=_run, name=f"screen-{strategy}", daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        span = f"{timeout / 60:.0f} 分钟" if timeout >= 60 else f"{timeout:.1f} 秒"
+        raise TimeoutError(f"策略 {strategy} 超过 {span} 未结束")
+    if "error" in box:
+        raise box["error"]
+    return box.get("result") or {}
+
+
 def _run_screening_schedule_tick(config: Config) -> None:
     """到点就跑：取"已到点的时间点里最晚的那个"，逐个策略查库去重后运行。"""
     times = sorted(
@@ -701,8 +737,12 @@ def _run_screening_schedule_tick(config: Config) -> None:
         if _screening_ran_since(strategy, since):
             continue
         try:
-            result = ScreeningService(config=config, db_manager=history_db).screen(
-                strategy=strategy, market=market, max_results=max_results
+            result = _screen_with_timeout(
+                ScreeningService(config=config, db_manager=history_db),
+                strategy=strategy,
+                market=market,
+                max_results=max_results,
+                timeout=_STRATEGY_TIMEOUT_SEC,
             )
             ran_any = True
             logger.info(

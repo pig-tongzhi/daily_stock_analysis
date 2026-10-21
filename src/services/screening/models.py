@@ -222,6 +222,10 @@ class ScreenResult:
     ranking_mode: str = "factor"
     degradation: list[str] = field(default_factory=list)
     snapshot_source: str = ""
+    # 候选池快照（约 100 只）：进了候选但没被选中的票 + 淘汰原因。
+    # 为什么需要：日报只能回答"选了哪 5 只"，回答不了"为什么没选另外 95 只"。
+    # 只存精简字段（身份 + 快照值 + 技术因子 + 判定），不存整行 DataFrame。
+    candidate_rows: list[dict] = field(default_factory=list)
     # 这批票用的是哪一天的行情（"2026-10-20"）。下游 pick_date 用它，
     # 不能再用"什么时候跑的"推 —— 凌晨补跑会标错日期。
     snapshot_trade_date: str = ""
