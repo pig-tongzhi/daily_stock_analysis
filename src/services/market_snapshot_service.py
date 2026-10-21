@@ -224,6 +224,9 @@ def save_market_snapshot(
         # 兼容老数据源的 pe_ratio / 新数据源的 pe_ttm
         if row.get("pe_ttm") is None:
             row["pe_ttm"] = _to_float(record.get("pe_ratio"))
+        # pe_ratio 是改名前的列名（语义相同）。表里两列都还在，写入必须同步，
+        # 否则仍在读 pe_ratio 的代码会拿不到数据。
+        row["pe_ratio"] = row.get("pe_ttm")
         for src_col, field in _TEXT_MAP.items():
             value = record.get(src_col)
             if value is None or value == "":
@@ -244,7 +247,7 @@ def save_market_snapshot(
             (canonical_id, as_of, code, name, industry,
              board_name, concepts, prev_close, open, high,
              low, price, change_amount, change_pct, amplitude,
-             volume, amount, turnover_rate, volume_ratio, pe_ttm,
+             volume, amount, turnover_rate, volume_ratio, pe_ttm, pe_ratio,
              pe_lyr, pb_ratio, dividend_yield, total_mv, circ_mv,
              total_shares, free_shares, high_52w, low_52w, change_5d,
              change_20d, change_60d, change_ytd, limit_up, limit_down,
@@ -254,7 +257,7 @@ def save_market_snapshot(
             (:canonical_id, :as_of, :code, :name, :industry,
              :board_name, :concepts, :prev_close, :open, :high,
              :low, :price, :change_amount, :change_pct, :amplitude,
-             :volume, :amount, :turnover_rate, :volume_ratio, :pe_ttm,
+             :volume, :amount, :turnover_rate, :volume_ratio, :pe_ttm, :pe_ratio,
              :pe_lyr, :pb_ratio, :dividend_yield, :total_mv, :circ_mv,
              :total_shares, :free_shares, :high_52w, :low_52w, :change_5d,
              :change_20d, :change_60d, :change_ytd, :limit_up, :limit_down,
@@ -279,6 +282,7 @@ def save_market_snapshot(
             turnover_rate=COALESCE(market_snapshot.turnover_rate, excluded.turnover_rate),
             volume_ratio=COALESCE(market_snapshot.volume_ratio, excluded.volume_ratio),
             pe_ttm=COALESCE(market_snapshot.pe_ttm, excluded.pe_ttm),
+            pe_ratio=COALESCE(market_snapshot.pe_ratio, excluded.pe_ratio),
             pe_lyr=COALESCE(market_snapshot.pe_lyr, excluded.pe_lyr),
             pb_ratio=COALESCE(market_snapshot.pb_ratio, excluded.pb_ratio),
             dividend_yield=COALESCE(market_snapshot.dividend_yield, excluded.dividend_yield),
