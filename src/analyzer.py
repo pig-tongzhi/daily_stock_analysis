@@ -13,6 +13,7 @@ A股自选股智能分析系统 - AI分析层
 import json
 import logging
 import math
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -3726,6 +3727,22 @@ Output strictly in the following JSON format. This is a complete Decision Dashbo
                     requested_temperature,
                     model_list=recovery_model_list,
                 )
+                # ── 强制 JSON 输出（2026-10-23）──────────────────────────────
+                # 2026-10-22 中国海油(600938) 因模型把答案拆成多个 ``` 代码块，
+                # 被 _extract_analysis_json_object 判 ambiguous_json，整只票的分析
+                # 结果丢失且不落库。放宽提取（同一天的另一处改动）能救回大部分，
+                # 但那是"事后补救"；设 response_format 是"事前约束"。
+                #
+                # 只对这种"结果必须是 JSON"的分析调用开启，不是全局开关。
+                # 本项目的 LLM 只有 DeepSeek（litellm_model=deepseek/deepseek-chat，
+                # model_list 里两个条目都是它的 legacy 别名），
+                # DeepSeek 支持 response_format={"type":"json_object"}，
+                # 且要求 prompt 里出现 "json" 字样 —— 分析 prompt 本来就要求输出 JSON。
+                #
+                # 留环境变量开关：万一某个模型/网关不认这个参数，
+                # 设 LLM_JSON_MODE=0 即可整体退回，不用改代码。
+                if os.getenv("LLM_JSON_MODE", "1").strip() != "0":
+                    call_kwargs.setdefault("response_format", {"type": "json_object"})
                 route_context = build_provider_cache_route_context(
                     model=model,
                     provider=usage_provider,
