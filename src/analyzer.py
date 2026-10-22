@@ -5306,19 +5306,75 @@ Output the complete Decision Dashboard in JSON format."""
             flags=re.DOTALL,
         )
         fenced_matches = list(fence_pattern.finditer(text))
+
+        # 2026-10-23：原来「多于一个代码块」/「代码块外有文字」/「语言标记不是 json」
+        # 全部直接判 ambiguous_json，等于一次格式抖动就丢掉整只票。
+        # 2026-10-22 16:39 中国海油(600938) 就是这样失败的：数据全拿到了
+        # （行情✓ 趋势✓ 情报✓），DeepSeek 却把答案拆成了多个代码块，
+        # 两次调用都是 ambiguous_json，结果被丢弃且不落库。
+        #
+        # 现在的策略：先按顺序挑「能完整解析、且带 stock_name」的那一个。
+        # 用 stock_name 当判别依据，是因为 schema 里它是必填项，
+        # 足以区分"真正的分析结果"和"顺带贴出来的示例片段"。
+        # 只有所有候选都挑不出来时，才继续报 ambiguous_json。
+        def _pick_valid(matches):
+            """在所有代码块里挑出唯一的分析结果。
+
+            注意不能"挑第一个就返回"：模型有时会把同一只票的分析写两遍
+            （内容相同，无害），有时会给两份互相矛盾的结果（有害）。
+            所以收集全部合法候选：
+              · 只有 1 个        → 用它
+              · 多个但内容完全相同 → 用任意一个（重复粘贴，无害）
+              · 多个且内容不同    → 仍然 ambiguous_json，不猜
+            """
+            found = []
+            for candidate in matches:
+                body = (candidate.group("body") or "").strip()
+                if not body:
+                    continue
+                lang = (candidate.group("lang") or "").strip().lower()
+                if lang not in {"", "json"}:
+                    continue
+                try:
+                    parsed = self._load_analysis_json_candidate(body)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if isinstance(parsed, dict) and parsed.get("stock_name"):
+                    found.append((body, parsed))
+            if not found:
+                return None
+            if len(found) == 1:
+                return found[0]
+            # 多个候选：只有内容完全一致才合流
+            first = json.dumps(found[0][1], sort_keys=True, ensure_ascii=False, default=str)
+            for body, parsed in found[1:]:
+                if json.dumps(parsed, sort_keys=True, ensure_ascii=False, default=str) != first:
+                    return None
+            return found[0]
+
         if len(fenced_matches) > 1:
+            picked = _pick_valid(fenced_matches)
+            if picked:
+                return picked
             raise ValueError("ambiguous_json")
+
         if len(fenced_matches) == 1:
             match = fenced_matches[0]
             outside = (text[:match.start()] + text[match.end():]).strip()
-            if outside:
-                raise ValueError("ambiguous_json")
             fence_lang = (match.group("lang") or "").strip().lower()
+            json_str = match.group("body").strip()
+
+            # 代码块外面允许有一点点散文（"以下是分析结果："这种），
+            # 但超过 _MAX_FENCE_PROSE 就不敢认了 —— 那更可能是模型给了
+            # 两套互相矛盾的分析。
+            _MAX_FENCE_PROSE = 200
+            if outside and len(outside) > _MAX_FENCE_PROSE:
+                raise ValueError("ambiguous_json")
             if fence_lang not in {"", "json"}:
                 raise ValueError("ambiguous_json")
-            json_str = match.group("body").strip()
             data = self._load_analysis_json_candidate(json_str)
             return json_str, data
+
         if "```" in text:
             raise ValueError("ambiguous_json")
 

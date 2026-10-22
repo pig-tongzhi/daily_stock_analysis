@@ -19,6 +19,7 @@ from pathlib import Path
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import List, Dict, Any, Optional, Tuple, Callable
@@ -3384,6 +3385,32 @@ class StockAnalysisPipeline:
                 logger.warning(
                     f"[{code}] 分析未成功: {result.error_message or '未知错误'}"
                 )
+                # 落盘原始响应（2026-10-23）。原来分析失败只留一行 warning，
+                # 模型的原始输出彻底消失 —— 2026-10-22 中国海油(600938) 因为
+                # ambiguous_json 失败，事后只能翻 12MB 的 debug 日志才看出原因。
+                # 这里把 raw_response 单独存一份，下次再出问题直接看它。
+                try:
+                    _raw = getattr(result, "raw_response", None)
+                    if _raw:
+                        _dir = os.path.join(
+                            os.path.dirname(os.path.dirname(os.path.dirname(
+                                os.path.abspath(__file__)))),
+                            "logs", "llm-parse-fail",
+                        )
+                        os.makedirs(_dir, exist_ok=True)
+                        _fp = os.path.join(
+                            _dir,
+                            f"{datetime.now():%Y-%m-%d}-{code}.txt",
+                        )
+                        with open(_fp, "w", encoding="utf-8") as _fh:
+                            _fh.write(f"# {code} {getattr(result, 'name', '') or ''}\n")
+                            _fh.write(f"# error: {result.error_message or ''}\n")
+                            _fh.write(f"# at: {datetime.now():%Y-%m-%d %H:%M:%S}\n")
+                            _fh.write("# ---- raw_response ----\n")
+                            _fh.write(str(_raw))
+                        logger.info(f"[{code}] 原始响应已存档: {_fp}")
+                except Exception as _exc:  # noqa: BLE001 - 存档失败不影响主流程
+                    logger.debug(f"[{code}] 原始响应存档失败: {_exc}")
             
             return result
             

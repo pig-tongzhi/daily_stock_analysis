@@ -298,14 +298,37 @@ class TestAnalyzerSchemaFallback(unittest.TestCase):
 
         self.assertEqual(getattr(context.exception, "details", {}).get("reason"), "ambiguous_json")
 
-    def test_validate_json_response_rejects_generic_fence_with_outside_text(self) -> None:
+    def test_validate_json_response_allows_short_prose_around_fence(self) -> None:
+        """代码块外面有一点散文是可以接受的。
+
+        契约在 2026-10-23 变了。原来只要 fence 外面有字就判 ambiguous_json，
+        实测代价太大：LLM 习惯说"以下是分析结果："，于是正常输出被当成歧义，
+        整只票的分析结果被丢弃（2026-10-22 中国海油 600938 就是这样失败的，
+        数据全拿到了，只因格式被判死）。
+
+        现在允许 ≤200 字符的散文；超过 200 才继续当歧义拒绝
+        （长散文更可能是模型给了两套互相矛盾的分析）。
+        """
         analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
         analyzer._config_override = SimpleNamespace(generation_backend="litellm")
 
-        with self.assertRaises(Exception) as context:
-            analyzer._validate_json_response("""Here is the JSON:
+        # _validate_json_response 的契约是「不抛异常即通过」（返回 None），
+        # 它被当作 response_validator 用，异常才会触发换模型。
+        analyzer._validate_json_response("""Here is the JSON:
 ```
 {"sentiment_score": 70, "trend_prediction": "看多"}
+```""")
+
+    def test_validate_json_response_rejects_fence_with_long_outside_prose(self) -> None:
+        """外面散文太长仍然要拒 —— 那更可能是两套矛盾的分析。"""
+        analyzer = GeminiAnalyzer.__new__(GeminiAnalyzer)
+        analyzer._config_override = SimpleNamespace(generation_backend="litellm")
+
+        long_prose = "这是一段很长的说明文字。" * 30  # 远超 200 字符
+        with self.assertRaises(Exception) as context:
+            analyzer._validate_json_response(f"""{long_prose}
+```
+{{"sentiment_score": 70, "trend_prediction": "看多"}}
 ```""")
 
         self.assertEqual(getattr(context.exception, "details", {}).get("reason"), "ambiguous_json")
