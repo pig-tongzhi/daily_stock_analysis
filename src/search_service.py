@@ -12,6 +12,7 @@ A股自选股智能分析系统 - 搜索服务模块
 """
 
 import logging
+import os
 import multiprocessing
 import re
 import threading
@@ -996,6 +997,102 @@ class SerpAPISearchProvider(BaseSearchProvider):
             return f"{snippet}\n\n【网页详情】\n{preview}"
 
         return f"【网页详情】\n{preview}"
+
+
+class WindSearchProvider(BaseSearchProvider):
+    """万得（Wind）资讯搜索。
+
+    为什么加它（2026-10-23）：Bocha 余额耗尽后，研判链第 4 步"多维度情报搜索"
+    实际拿到 0 条（日志实测 "情报搜索完成: 共 0 条结果"），等于在无资讯状态下
+    做判断。万得已经有 MCP 接口和 token，且第三波一直在用它的资讯，质量可用
+    （实测能返回半年报要点这种实质内容）。
+
+    不走 CLI 是因为本服务跑在云机上，那里没有 wind-mcp-skill 的 node 脚本；
+    直接打 MCP 的 HTTP 接口，和 snapshot.py 取行情是同一套鉴权。
+
+    注意响应结构：内容藏在 result.content[0].text 里、而且是一段 JSON 字符串，
+    不在 structuredContent 里 —— 按 structuredContent 取会永远得到 0 条。
+    """
+
+    MCP_URL = "https://mcp.wind.com.cn/vserver_financial_docs/mcp/"
+    TOKEN_ENVS = ("WIND_MCP_TOKEN", "WIND_TOKEN", "WIND_API_KEY")
+
+    def __init__(self):
+        token = ""
+        for key in self.TOKEN_ENVS:
+            value = (os.getenv(key) or "").strip()
+            if value:
+                token = value
+                break
+        self._token = token
+        # BaseSearchProvider 的 api_keys 传 token，保持同名接口不变
+        super().__init__([token] if token else [], "Wind")
+
+    def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
+        import time as _t
+        t0 = _t.time()
+        if not (api_key or self._token):
+            return SearchResponse(query=query, results=[], provider="Wind",
+                                  success=False, error_message="未配置 WIND_MCP_TOKEN")
+        body = {
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {
+                "name": "get_financial_news",
+                "arguments": {"query": query, "top_k": str(max(1, min(max_results, 10)))},
+            },
+        }
+        try:
+            import json as _json
+            import urllib.request as _u
+            req = _u.Request(
+                self.MCP_URL, data=_json.dumps(body).encode("utf-8"),
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream",
+                    "Authorization": f"Bearer {api_key or self._token}",
+                },
+                method="POST",
+            )
+            with _u.urlopen(req, timeout=60) as resp:
+                resp.encoding = "utf-8"
+                raw = resp.read().decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001 - 网络异常按 provider 失败处理
+            return SearchResponse(query=query, results=[], provider="Wind",
+                                  success=False, error_message=f"{type(exc).__name__}: {exc}")
+        try:
+            import json as _json
+            text = "".join(line[5:].strip() for line in raw.splitlines() if line.startswith("data:"))
+            payload = _json.loads(text or raw)
+            result = payload.get("result") or {}
+            # 内容在 content[0].text，是一段 JSON 字符串
+            blobs = [c.get("text") for c in (result.get("content") or []) if c.get("type") == "text"]
+            items = []
+            for blob in blobs:
+                try:
+                    items = ((_json.loads(blob or "{}").get("data") or {}).get("items")) or []
+                except Exception:
+                    continue
+                if items:
+                    break
+            results = []
+            for it in items[:max_results]:
+                content = str(it.get("content") or "").strip()
+                if not content:
+                    continue
+                results.append(SearchResult(
+                    title=str(it.get("title") or content[:40]),
+                    snippet=content[:500],
+                    url=str(it.get("url") or ""),
+                    source=str(it.get("source") or "Wind"),
+                    published_date=it.get("date"),
+                ))
+            return SearchResponse(query=query, results=results, provider="Wind",
+                                  success=bool(results), search_time=_t.time() - t0,
+                                  error_message=None if results else "万得未返回资讯")
+        except Exception as exc:  # noqa: BLE001
+            return SearchResponse(query=query, results=[], provider="Wind",
+                                  success=False, search_time=_t.time() - t0,
+                                  error_message=f"parse: {type(exc).__name__}: {exc}")
 
 
 class BochaSearchProvider(BaseSearchProvider):
@@ -2452,6 +2549,12 @@ class SearchService:
 
         # 初始化搜索引擎（按优先级排序）
         # 1. Bocha 优先（中文搜索优化，AI摘要）
+        # 万得排第一：Bocha 余额不足时它是唯一还有实质内容的来源。
+        # 放在最前面，避免每次先花一次超时去撞 Bocha 的 402。
+        wind_provider = WindSearchProvider()
+        if wind_provider.is_available:
+            self._providers.append(wind_provider)
+
         if bocha_keys:
             self._providers.append(BochaSearchProvider(bocha_keys))
             logger.info(f"已配置 Bocha 搜索，共 {len(bocha_keys)} 个 API Key")
